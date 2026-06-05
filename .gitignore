@@ -1,0 +1,16 @@
+# Godot 4 导入缓存 / 临时文件
+.godot/
+*.tmp
+
+# 开发期截图（测试产物，可由 tests/shot_*.gd 重新生成）
+_shot_*.png
+_shot_*.png.import
+
+# 导出 / 打包产物
+build/
+*.pck
+*.zip
+
+# 系统文件
+.DS_Store
+Thumbs.db

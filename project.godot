@@ -1,0 +1,29 @@
+; Godot 工程配置 —— VoxelCraft（像《我的世界》的体素沙盒）
+config_version=5
+
+[application]
+
+config/name="VoxelCraft"
+config/description="一个像《我的世界》的体素沙盒：宏大、可无限延伸、专心建造。"
+config/version="1.0.0"
+run/main_scene="res://scenes/Main.tscn"
+config/icon="res://icon.png"
+config/features=PackedStringArray("4.6", "Forward Plus")
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+window/vsync/vsync_mode=1
+
+[rendering]
+
+textures/default_filters/anisotropic_filtering_level=4
+rendering/occlusion_culling/use_occlusion_culling=true
+anti_aliasing/quality/msaa_3d=2
+
+[gui]
+
+theme/custom="res://ui/theme.tres"

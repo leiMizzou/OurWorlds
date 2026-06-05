@@ -1,0 +1,1568 @@
+extends CharacterBody3D
+# 第一人称/第三人称：鼠标转视角、WASD 走、空格跳、双击空格切飞行、F5 切视角、Esc 放/抓鼠标。
+# 顺带管"挖/放/准星高亮"和快捷栏选块（v1 先放一起，以后可拆成 Interactor）。
+
+const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
+const Chunk = preload("res://scripts/Chunk.gd")
+
+signal action_feedback(kind: String, label: String)
+signal world_feedback(kind: String, cell: Vector3i, block_id: int)
+signal material_picked(block_id: int)
+signal footstep(block_id: int)
+signal landed(block_id: int)
+signal splashed()
+
+const BRUSH_RADII := [0, 1]
+const BULK_PLACE_EFFECT_THRESHOLD := 24
+const BUILD_TEMPLATES := [
+	{"id": "off", "label": "关闭"},
+	{"id": "platform", "label": "平台"},
+	{"id": "pillar", "label": "立柱"},
+	{"id": "arch", "label": "拱门"},
+	{"id": "wall", "label": "墙面"},
+	{"id": "stairs", "label": "楼梯"},
+	{"id": "room_frame", "label": "房架"},
+	{"id": "cabin", "label": "小屋"},
+	{"id": "campfire", "label": "营火"},
+	{"id": "bridge", "label": "小桥"},
+	{"id": "garden", "label": "花圃"},
+	{"id": "beacon_tower", "label": "灯塔"},
+	{"id": "signpost", "label": "路标"},
+]
+# 命名动作 → 物理按键。集中在此处，方便将来切到 InputMap（本任务不改 project.godot，
+# 仅把散落的硬编码 KEY_* 收敛成命名入口，调用点统一走 _action_pressed/_action_just_pressed）。
+const ACTION_KEYS := {
+	"move_forward": [KEY_W],
+	"move_back": [KEY_S],
+	"move_left": [KEY_A],
+	"move_right": [KEY_D],
+	"sprint": [KEY_SHIFT],
+	"jump": [KEY_SPACE],
+	"fly_descend": [KEY_SHIFT],
+	"toggle_view": [KEY_F5, KEY_V],
+	"cycle_recent": [KEY_R],
+	"toggle_brush": [KEY_B],
+	"prev_template": [KEY_Q],
+	"toggle_template": [KEY_T],
+	"rotate_template": [KEY_G],
+	"undo": [KEY_Z],
+	"redo": [KEY_Y],
+}
+
+const DEFAULT_SENS := 0.0025
+const WALK := 5.5
+const RUN := 9.0
+const FLY := 16.0
+const JUMP := 7.5
+const GRAVITY := 22.0
+const REACH := 6.0
+const CAM_DIST := 4.5     # 第三人称相机离身后多远
+
+var world                          # World 节点（由 Main 注入）
+var lib: BlockLibrary              # 由 Main 注入
+var spring: SpringArm3D            # 相机吊臂（自动避开身后地形）
+var camera: Camera3D
+var avatar: Node3D                 # 方块小人（第三人称才显示）
+var _arm_l: Node3D                 # 四肢关节(pivot)，走路时绕 X 摆动
+var _arm_r: Node3D
+var _leg_l: Node3D
+var _leg_r: Node3D
+var _anim_amount := 0.0            # 走路动画幅度（移动淡入、静止淡出）
+var _cape: Node3D                  # 披风（站立下垂、飞行后扬）
+var _fly_amount := 0.0             # 飞行(超人)姿态混合
+var _anim_t := 0.0                 # 动画计时（披风抖动）
+# 隐藏技能：飞行中依次按出 KAMEHAMEHA 发射龟派气功波，气化前方一大条方块。
+const KAMEHAMEHA_SEQ := "KAMEHAMEHA"
+const KAME_RADIUS := 5
+const KAME_LENGTH := 64
+var _combo := ""
+var _kame_cooldown := 0.0
+var _kame_fire_t := 0.0
+var _kame_offsets := []
+var highlight: MeshInstance3D
+var placement_preview: MeshInstance3D
+var placement_blocked_preview: MeshInstance3D
+var brush_preview_lines: MeshInstance3D
+
+var fly := false
+var view_mode := 0   # 0=第一人称, 1=第三人称(身后), 2=第三人称(正面)
+var input_enabled := true
+var mouse_sensitivity := DEFAULT_SENS
+var pitch := 0.0
+var sel_index := 0
+var selected_block_id := BlockLibrary.GRASS
+var brush_index := 0
+var template_index := 0
+var template_orientation_index := 0
+var recent_block_ids := []
+var overlays_visible := true
+var _last_space := -1000
+var _has_target := false
+var _target := Vector3i.ZERO
+var _place := Vector3i.ZERO
+var _target_normal := Vector3i.UP
+var _bob := 0.0
+var _step_phase := 0
+var _was_on_floor := true
+var _was_in_water := false
+var _preview_material: StandardMaterial3D
+var _blocked_preview_material: StandardMaterial3D
+var _preview_box_mesh: BoxMesh
+var _preview_mesh_key := ""
+var _blocked_preview_mesh_key := ""
+var _brush_line_material: StandardMaterial3D
+
+func _ready() -> void:
+	_ensure_input_map()
+	var cs := CollisionShape3D.new()
+	var caps := CapsuleShape3D.new()
+	caps.radius = 0.35
+	caps.height = 1.7
+	cs.shape = caps
+	cs.position = Vector3(0, 0.9, 0)
+	add_child(cs)
+
+	# 相机吊臂：第一人称 length=0（贴在头上）；第三人称 length>0（拉到身后，且自动避免穿墙）
+	spring = SpringArm3D.new()
+	spring.position = Vector3(0, 1.62, 0)
+	spring.spring_length = 0.0
+	spring.margin = 0.3
+	spring.add_excluded_object(get_rid())   # 别撞到自己
+	add_child(spring)
+
+	camera = Camera3D.new()
+	camera.far = 800.0
+	spring.add_child(camera)
+
+	avatar = _make_avatar()
+	avatar.visible = false                   # 第一人称看不到自己（正常）
+	add_child(avatar)
+
+	highlight = _make_highlight()
+	placement_preview = _make_placement_preview()
+	placement_blocked_preview = _make_blocked_placement_preview()
+	brush_preview_lines = _make_brush_preview_lines()
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+func _exit_tree() -> void:
+	_free_overlay_node(highlight)
+	_free_overlay_node(placement_preview)
+	_free_overlay_node(placement_blocked_preview)
+	_free_overlay_node(brush_preview_lines)
+
+func current_block() -> int:
+	if lib != null and lib.has_def(selected_block_id):
+		return selected_block_id
+	return lib.hotbar_blocks()[sel_index]
+
+func select_block_id(id: int, feedback_kind: String = "select") -> bool:
+	if lib == null or not lib.has_def(id) or not lib.is_renderable(id):
+		return false
+	selected_block_id = id
+	var blocks := lib.hotbar_blocks()
+	for i in range(blocks.size()):
+		if int(blocks[i]) == id:
+			sel_index = i
+			break
+	var label := lib.block_name(current_block())
+	if feedback_kind == "pick":
+		label = "拾取 %s" % label
+	action_feedback.emit(feedback_kind, label)
+	return true
+
+func set_recent_blocks(blocks: Array) -> void:
+	recent_block_ids.clear()
+	if lib == null:
+		return
+	for raw in blocks:
+		var id := int(raw)
+		if lib.has_def(id) and lib.is_renderable(id) and not recent_block_ids.has(id):
+			recent_block_ids.append(id)
+		if recent_block_ids.size() >= 8:
+			break
+
+func cycle_recent(step: int = 1) -> bool:
+	if recent_block_ids.is_empty():
+		return false
+	var current := current_block()
+	var idx := recent_block_ids.find(current)
+	var next_idx := 0 if idx < 0 else posmod(idx + step, recent_block_ids.size())
+	select_block_id(int(recent_block_ids[next_idx]))
+	return true
+
+func set_overlays_visible(enabled: bool) -> void:
+	overlays_visible = enabled
+	if not enabled:
+		_hide_build_overlays()
+
+# ---------- 命名动作入口（为发布期切 InputMap 预留；现在读 ACTION_KEYS 映射的物理键） ----------
+func _action_keys(action: String) -> Array:
+	return ACTION_KEYS.get(action, [])
+
+# 把命名动作注册进 InputMap（用物理键），让游戏拥有正式输入映射：
+# 可在此基础上加手柄事件 / 做重绑定 UI；_action_pressed 会优先读 InputMap，物理键查作兜底。
+func _ensure_input_map() -> void:
+	for action in ACTION_KEYS:
+		if not InputMap.has_action(action):
+			InputMap.add_action(action, 0.2)
+		for code in ACTION_KEYS[action]:
+			var ev := InputEventKey.new()
+			ev.physical_keycode = int(code)
+			if not _input_map_has_key(action, int(code)):
+				InputMap.action_add_event(action, ev)
+
+func _input_map_has_key(action: String, physical_keycode: int) -> bool:
+	for existing in InputMap.action_get_events(action):
+		if existing is InputEventKey and int(existing.physical_keycode) == physical_keycode:
+			return true
+	return false
+
+# 持续按住型（移动/冲刺/飞行升降）——每帧轮询。
+func _action_pressed(action: String) -> bool:
+	# 优先走 InputMap（支持手柄/重绑定），同时保留物理键直查作兜底（零回归）。
+	if InputMap.has_action(action) and Input.is_action_pressed(action):
+		return true
+	for code in _action_keys(action):
+		if Input.is_physical_key_pressed(int(code)):
+			return true
+	return false
+
+# 按下边沿型（切视角/模板/撤销等）——配合 _on_key 的按键码使用。
+func _action_matches(action: String, code: int) -> bool:
+	return _action_keys(action).has(code)
+
+# 给 HUD 准星读：是否瞄准了方块。
+func has_target() -> bool:
+	return _has_target
+
+# 给 HUD 准星读：当前放置意图状态 idle/ok/blocked（轻量，不重建预览网格）。
+func aim_state() -> String:
+	if not _has_target:
+		return "idle"
+	for cell in _placement_cells():
+		if _place_blocked_reason(cell) != "":
+			return "blocked"
+	return "ok"
+
+func _input(event: InputEvent) -> void:
+	if not input_enabled:
+		return
+	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		rotate_y(-event.relative.x * mouse_sensitivity)
+		pitch = clampf(pitch - event.relative.y * mouse_sensitivity, -1.4, 1.4)
+		spring.rotation.x = pitch
+	elif event is InputEventKey and event.pressed and not event.echo:
+		_on_key(event.keycode)
+	elif event is InputEventMouseButton and event.pressed:
+		_on_click(event.button_index)
+
+func _on_key(code: int) -> void:
+	_kame_combo_key(code)
+	if _action_matches("toggle_view", code):
+		_toggle_view()
+	elif _action_matches("jump", code):
+		var now := Time.get_ticks_msec()
+		if now - _last_space < 300:        # 双击跳跃键 = 切换飞行
+			fly = not fly
+			velocity.y = 0.0
+			action_feedback.emit("mode", "飞行" if fly else "步行")
+		_last_space = now
+	elif _action_matches("cycle_recent", code):
+		if not cycle_recent(1):
+			action_feedback.emit("blocked", "没有最近材料")
+	elif _action_matches("toggle_brush", code):
+		_toggle_build_brush()
+	elif _action_matches("prev_template", code):
+		_previous_build_template()
+	elif _action_matches("toggle_template", code):
+		_toggle_build_template()
+	elif _action_matches("rotate_template", code):
+		_rotate_build_template()
+	elif _action_matches("undo", code):
+		if world != null and world.has_method("undo_last_edit"):
+			world.undo_last_edit()
+	elif _action_matches("redo", code):
+		if world != null and world.has_method("redo_last_edit"):
+			world.redo_last_edit()
+	elif code >= KEY_1 and code <= KEY_9:
+		var i := code - KEY_1
+		_select_slot(i)
+
+func _toggle_view() -> void:
+	view_mode = (view_mode + 1) % 3
+	match view_mode:
+		0:   # 第一人称
+			spring.spring_length = 0.0
+			spring.rotation.y = 0.0
+			avatar.visible = false
+		1:   # 第三人称：身后
+			spring.spring_length = CAM_DIST
+			spring.rotation.y = 0.0
+			avatar.visible = true
+		2:   # 第三人称：正面（相机绕到身前看脸）
+			spring.spring_length = CAM_DIST
+			spring.rotation.y = PI
+			avatar.visible = true
+
+func _on_click(button: int) -> void:
+	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED   # 先点回来抓鼠标
+		return
+	# 命名点击意图：break=左键挖 / place=右键放 / pick=中键取材（发布期可重映射到 InputMap）。
+	if button == MOUSE_BUTTON_LEFT and _has_target:
+		_try_break_target()
+	elif button == MOUSE_BUTTON_RIGHT and _has_target:
+		_try_place_current()
+	elif button == MOUSE_BUTTON_MIDDLE:
+		pick_target_block()
+	elif button == MOUSE_BUTTON_WHEEL_UP:
+		_select_slot(sel_index - 1)
+	elif button == MOUSE_BUTTON_WHEEL_DOWN:
+		_select_slot(sel_index + 1)
+
+func pick_target_block() -> bool:
+	if not _has_target or world == null or lib == null:
+		action_feedback.emit("blocked", "没有可拾取方块")
+		return false
+	var block_id: int = world.get_block(_target.x, _target.y, _target.z)
+	if not lib.is_renderable(block_id):
+		action_feedback.emit("blocked", "无法拾取")
+		return false
+	if not select_block_id(block_id, "pick"):
+		action_feedback.emit("blocked", "无法拾取")
+		return false
+	material_picked.emit(block_id)
+	return true
+
+func _select_slot(i: int) -> void:
+	var n := lib.hotbar_blocks().size()
+	if n == 0:
+		return
+	var next := posmod(i, n)
+	var next_id := int(lib.hotbar_blocks()[next])
+	if next == sel_index and selected_block_id == next_id:
+		return
+	sel_index = next
+	selected_block_id = next_id
+	action_feedback.emit("select", lib.block_name(current_block()))
+
+func _try_place_current() -> bool:
+	if not _has_target:
+		return false
+	var edits := _placement_edits()
+	var cells := _edit_cells(edits)
+	var reason := _placement_blocked_reason(cells)
+	if reason != "":
+		action_feedback.emit("blocked", reason)
+		world_feedback.emit("blocked", _place, current_block())
+		return false
+	var block_id := current_block()
+	var placed := 0
+	if world != null and world.has_method("request_block_edits"):
+		placed = world.request_block_edits(edits)
+	elif world != null and world.has_method("request_edits") and not _template_uses_fixed_blocks():
+		placed = world.request_edits(cells, block_id)
+	else:
+		for raw in edits:
+			var edit: Dictionary = raw
+			var c: Vector3i = edit["pos"]
+			var id := int(edit["id"])
+			if world.request_edit(c.x, c.y, c.z, id):
+				placed += 1
+	if placed > 0:
+		var label := build_template_label() if _template_uses_fixed_blocks() else lib.block_name(block_id)
+		if build_template_id() != "off" and not _template_uses_fixed_blocks():
+			label = build_template_label() + " " + label
+		if placed > 1:
+			label = "%s x%d" % [label, placed]
+		action_feedback.emit("place", label)
+		if placed >= BULK_PLACE_EFFECT_THRESHOLD and build_template_id() != "campfire":
+			world_feedback.emit("bulk_place", _bulk_feedback_cell(edits), _bulk_feedback_block_id(edits))
+		if build_template_id() == "campfire":
+			world_feedback.emit("campfire", _place, BlockLibrary.LANTERN)
+		for raw in edits:
+			var edit: Dictionary = raw
+			var c: Vector3i = edit["pos"]
+			world_feedback.emit("place", c, int(edit["id"]))
+		return true
+	action_feedback.emit("blocked", "无法放置")
+	world_feedback.emit("blocked", _place, block_id)
+	return false
+
+func _try_break_target() -> bool:
+	if not _has_target or world == null:
+		return false
+	var cells := _break_cells()
+	var removed := []
+	for cell in cells:
+		var c: Vector3i = cell
+		var before: int = world.get_block(c.x, c.y, c.z)
+		if before != BlockLibrary.AIR:
+			removed.append({"cell": c, "id": before})
+	var changed := 0
+	if world.has_method("request_edits"):
+		changed = world.request_edits(cells, BlockLibrary.AIR)
+	else:
+		for entry in removed:
+			var item: Dictionary = entry
+			var c: Vector3i = item["cell"]
+			if world.request_edit(c.x, c.y, c.z, BlockLibrary.AIR):
+				changed += 1
+	if changed <= 0:
+		action_feedback.emit("blocked", "没有可挖掘方块")
+		world_feedback.emit("blocked", _target, BlockLibrary.AIR)
+		return false
+	var label := "挖掘"
+	if changed > 1:
+		label = "挖掘 x%d" % changed
+	action_feedback.emit("break", label)
+	var emitted := 0
+	for entry in removed:
+		if emitted >= changed:
+			break
+		var item: Dictionary = entry
+		var c: Vector3i = item["cell"]
+		world_feedback.emit("break", c, int(item["id"]))
+		emitted += 1
+	return true
+
+func _physics_process(delta: float) -> void:
+	_kame_cooldown = maxf(0.0, _kame_cooldown - delta)
+	_kame_fire_t = maxf(0.0, _kame_fire_t - delta)
+	if not input_enabled:
+		velocity = Vector3.ZERO
+		return
+	var dir := Vector3.ZERO
+	if _action_pressed("move_forward"): dir -= transform.basis.z
+	if _action_pressed("move_back"): dir += transform.basis.z
+	if _action_pressed("move_left"): dir -= transform.basis.x
+	if _action_pressed("move_right"): dir += transform.basis.x
+
+	var moving := dir.length_squared() > 0.01
+	var running := _action_pressed("sprint")
+
+	if fly:
+		dir.y = 0.0
+		if _action_pressed("jump"): dir.y += 1.0
+		if _action_pressed("fly_descend"): dir.y -= 1.0
+		velocity = dir.normalized() * FLY
+	else:
+		var speed := RUN if running else WALK
+		var flat := Vector3(dir.x, 0, dir.z).normalized()
+		velocity.x = flat.x * speed
+		velocity.z = flat.z * speed
+		velocity.y -= GRAVITY * delta
+		if _action_pressed("jump") and is_on_floor():
+			velocity.y = JUMP
+
+	move_and_slide()
+	_check_void_respawn()
+	_update_ground_audio()
+	_update_camera_motion(delta, moving, running)
+	_update_highlight()
+
+func _update_camera_motion(delta: float, moving: bool, running: bool) -> void:
+	var target_y := 1.62
+	if moving and is_on_floor() and not fly:
+		_bob += delta * (13.0 if running else 9.0)
+		target_y += sin(_bob) * (0.045 if running else 0.028)
+		var step_phase := int(_bob / PI)
+		if step_phase != _step_phase:
+			_step_phase = step_phase
+			footstep.emit(_block_under_feet())
+	else:
+		_bob = lerpf(_bob, 0.0, minf(delta * 4.0, 1.0))
+		_step_phase = int(_bob / PI)
+	spring.position.y = lerpf(spring.position.y, target_y, minf(delta * 9.0, 1.0))
+	var target_fov := 79.0 if fly else (76.0 if running and moving else 72.0)
+	camera.fov = lerpf(camera.fov, target_fov, minf(delta * 5.0, 1.0))
+	_animate_avatar(delta, moving and is_on_floor() and not fly, running)
+
+# 掉出世界底部时重生回当前位置地表，避免永久坠落。
+func _check_void_respawn() -> void:
+	if global_position.y >= -8.0 or world == null:
+		return
+	var gx := int(floor(global_position.x))
+	var gz := int(floor(global_position.z))
+	var sy: int = world.surface_y(gx, gz)
+	global_position = Vector3(gx + 0.5, float(sy) + 3.0, gz + 0.5)
+	velocity = Vector3.ZERO
+	action_feedback.emit("blocked", "已脱离虚空，重生回地面")
+
+# 落地 / 入水的音频事件（脚步在 _update_camera_motion 里按步幅触发）。
+func _update_ground_audio() -> void:
+	var on_floor := is_on_floor()
+	if on_floor and not _was_on_floor and not fly:
+		landed.emit(_block_under_feet())
+	_was_on_floor = on_floor
+	var in_water := _block_under_feet() == 9   # WATER
+	if in_water and not _was_in_water:
+		splashed.emit()
+	_was_in_water = in_water
+
+# 脚下所踩方块的 id（给脚步音选材质）。
+func _block_under_feet() -> int:
+	if world == null:
+		return 0
+	var gx := int(floor(global_position.x))
+	var gy := int(floor(global_position.y - 0.5))
+	var gz := int(floor(global_position.z))
+	return world.get_block(gx, gy, gz)
+
+# ---------- 准星射线：找瞄准的方块 ----------
+func _update_highlight() -> void:
+	if world == null:
+		return
+	if overlays_visible and not highlight.is_inside_tree():
+		world.add_child(highlight)     # 挂在世界下（不随玩家旋转）
+	# 从头部沿"玩家朝向(偏航+俯仰)"射线 —— 与相机模式无关，正面视角下也照样朝前方挖
+	var from := spring.global_position
+	var aim := global_transform.basis * (Basis(Vector3.RIGHT, pitch) * Vector3(0, 0, -1))
+	var to := from + aim * REACH
+	var q := PhysicsRayQueryParameters3D.create(from, to)
+	q.collide_with_bodies = true
+	q.exclude = [get_rid()]            # 别打到自己（第三人称相机在身后时尤其要排除）
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.is_empty():
+		_has_target = false
+		_hide_build_overlays()
+		return
+	var pos: Vector3 = hit["position"]
+	var nrm: Vector3 = hit["normal"]
+	_target = Vector3i((pos - nrm * 0.5).floor())
+	_place = Vector3i((pos + nrm * 0.5).floor())
+	_target_normal = _normal_to_cell(nrm)
+	_has_target = true
+	if not overlays_visible:
+		_hide_build_overlays()
+		return
+	highlight.visible = true
+	highlight.global_position = Vector3(_target) + Vector3(0.5, 0.5, 0.5)
+	_update_placement_preview()
+
+func _update_placement_preview() -> void:
+	if world == null or placement_preview == null or placement_blocked_preview == null:
+		return
+	if not overlays_visible:
+		_hide_build_overlays()
+		return
+	if not placement_preview.is_inside_tree():
+		world.add_child(placement_preview)
+	if not placement_blocked_preview.is_inside_tree():
+		world.add_child(placement_blocked_preview)
+	var edits := _placement_edits()
+	var cells := _edit_cells(edits)
+	var blocked_cells := _blocked_placement_cells(cells)
+	var ok := blocked_cells.is_empty()
+	placement_preview.visible = true
+	var origin := _preview_center(cells)
+	var multi := cells.size() > 1
+	var alpha := 0.24 if multi else 0.42
+	var preview_color := _current_preview_color(alpha)
+	_preview_material.albedo_color = preview_color
+	_preview_material.emission = _preview_material.albedo_color
+	_update_placement_preview_mesh(placement_preview, edits, origin, false, alpha)
+	placement_preview.global_position = origin
+	placement_preview.scale = Vector3.ONE
+	_update_blocked_placement_preview(blocked_cells, origin, multi)
+	_update_brush_preview_lines(cells, ok)
+
+func placement_intent_summary() -> Dictionary:
+	var mode := build_mode_label()
+	var material := lib.block_name(current_block()) if lib != null else "材料"
+	if not _has_target:
+		return {
+			"state": "等待目标",
+			"state_kind": "idle",
+			"mode": mode,
+			"material": material,
+			"detail": "未瞄准方块",
+			"count": 0,
+			"blocked_count": 0,
+			"footprint": "",
+			"reason": "",
+		}
+	var edits := _placement_edits()
+	var cells := _edit_cells(edits)
+	var reason := _placement_blocked_reason(cells)
+	var blocked_cells := _blocked_placement_cells(cells)
+	var footprint := _placement_footprint_label(cells)
+	var count := cells.size()
+	var material_label := "多材质" if _template_uses_fixed_blocks() else material
+	var detail := "%s · %d 格" % [material_label, count]
+	if footprint != "":
+		detail = "%s · %s" % [detail, footprint]
+	var state := "可放置"
+	var state_kind := "ok"
+	if reason != "":
+		state_kind = "blocked"
+		state = "阻挡 %d 格" % maxi(1, blocked_cells.size())
+	return {
+		"state": state,
+		"state_kind": state_kind,
+		"mode": mode,
+		"material": material_label,
+		"detail": detail,
+		"count": count,
+		"blocked_count": blocked_cells.size(),
+		"footprint": footprint,
+		"reason": reason,
+	}
+
+func build_mode_label() -> String:
+	if build_template_id() != "off":
+		return "模板 %s %s" % [build_template_label(), build_template_orientation_label()]
+	if brush_radius() > 0:
+		return "画笔 " + brush_label()
+	return "单格"
+
+func _placement_footprint_label(cells: Array) -> String:
+	if cells.is_empty():
+		return ""
+	var min_cell: Vector3i = cells[0]
+	var max_cell: Vector3i = cells[0]
+	for raw in cells:
+		var c: Vector3i = raw
+		min_cell.x = mini(min_cell.x, c.x)
+		min_cell.y = mini(min_cell.y, c.y)
+		min_cell.z = mini(min_cell.z, c.z)
+		max_cell.x = maxi(max_cell.x, c.x)
+		max_cell.y = maxi(max_cell.y, c.y)
+		max_cell.z = maxi(max_cell.z, c.z)
+	var size := max_cell - min_cell + Vector3i.ONE
+	return "占地 %dx%dx%d" % [size.x, size.y, size.z]
+
+func _can_place_at(cell: Vector3i) -> bool:
+	return _place_blocked_reason(cell) == ""
+
+func _placement_blocked_reason(cells: Array) -> String:
+	for cell in cells:
+		var c: Vector3i = cell
+		var reason := _place_blocked_reason(c)
+		if reason != "":
+			return reason
+	return ""
+
+func _blocked_placement_cells(cells: Array) -> Array:
+	var blocked := []
+	for cell in cells:
+		var c: Vector3i = cell
+		if _place_blocked_reason(c) != "":
+			blocked.append(c)
+	return blocked
+
+func _current_preview_color(alpha: float) -> Color:
+	var col := Color(0.05, 1.0, 0.92, 1.0)
+	if build_template_id() == "campfire":
+		col = Color(1.0, 0.56, 0.18, 1.0)
+	elif build_template_id() == "bridge" and lib != null and lib.has_method("preview_color"):
+		col = lib.preview_color(BlockLibrary.PLANKS)
+	elif build_template_id() == "garden":
+		col = Color(0.82, 1.0, 0.52, 1.0)
+	elif build_template_id() == "cabin" and lib != null and lib.has_method("preview_color"):
+		col = lib.preview_color(BlockLibrary.PLANKS)
+	elif build_template_id() == "beacon_tower" and lib != null and lib.has_method("preview_color"):
+		col = lib.preview_color(BlockLibrary.MOONSTONE_LAMP)
+	elif build_template_id() == "signpost" and lib != null and lib.has_method("preview_color"):
+		col = lib.preview_color(BlockLibrary.LOG)
+	elif lib != null and lib.has_method("preview_color"):
+		col = lib.preview_color(current_block())
+	col.a = alpha
+	return col
+
+func brush_radius() -> int:
+	return int(BRUSH_RADII[brush_index])
+
+func brush_label() -> String:
+	var diameter := brush_radius() * 2 + 1
+	return "%dx%d" % [diameter, diameter]
+
+func _toggle_build_brush() -> void:
+	brush_index = posmod(brush_index + 1, BRUSH_RADII.size())
+	if brush_radius() > 0:
+		template_index = 0
+	action_feedback.emit("mode", "画笔 " + brush_label())
+
+func build_template_id() -> String:
+	var meta: Dictionary = BUILD_TEMPLATES[template_index]
+	return String(meta.get("id", "off"))
+
+func build_template_label() -> String:
+	var meta: Dictionary = BUILD_TEMPLATES[template_index]
+	return String(meta.get("label", "关闭"))
+
+func build_template_count() -> int:
+	return BUILD_TEMPLATES.size()
+
+func build_template_index() -> int:
+	return template_index
+
+func build_template_id_at(index: int) -> String:
+	var meta: Dictionary = BUILD_TEMPLATES[posmod(index, BUILD_TEMPLATES.size())]
+	return String(meta.get("id", "off"))
+
+func build_template_label_at(index: int) -> String:
+	var meta: Dictionary = BUILD_TEMPLATES[posmod(index, BUILD_TEMPLATES.size())]
+	return String(meta.get("label", "关闭"))
+
+func build_template_orientation_label() -> String:
+	if build_template_id() == "off":
+		return ""
+	return "东西" if template_orientation_index == 0 else "南北"
+
+func _toggle_build_template() -> void:
+	_step_build_template(1)
+
+func _previous_build_template() -> void:
+	_step_build_template(-1)
+
+func _step_build_template(step: int) -> void:
+	template_index = posmod(template_index + step, BUILD_TEMPLATES.size())
+	if build_template_id() != "off":
+		brush_index = 0
+	action_feedback.emit("mode", _build_template_status_label())
+
+func _rotate_build_template() -> bool:
+	if build_template_id() == "off":
+		action_feedback.emit("blocked", "先选择模板")
+		return false
+	template_orientation_index = posmod(template_orientation_index + 1, 2)
+	action_feedback.emit("mode", _build_template_status_label())
+	if _has_target:
+		_update_placement_preview()
+	return true
+
+func _build_template_status_label() -> String:
+	if build_template_id() == "off":
+		return "模板 关闭"
+	return "模板 %s %s" % [build_template_label(), build_template_orientation_label()]
+
+func _placement_cells() -> Array:
+	var template_cells := _template_cells()
+	if not template_cells.is_empty():
+		return template_cells
+	var radius := brush_radius()
+	if radius <= 0:
+		return [_place]
+	var axes := _brush_axes(_target_normal)
+	var axis_a: Vector3i = axes[0]
+	var axis_b: Vector3i = axes[1]
+	var cells := []
+	for b in range(-radius, radius + 1):
+		for a in range(-radius, radius + 1):
+			cells.append(_place + axis_a * a + axis_b * b)
+	return cells
+
+func _placement_edits() -> Array:
+	match build_template_id():
+		"campfire":
+			return _campfire_template_edits()
+		"bridge":
+			return _bridge_template_edits()
+		"garden":
+			return _garden_template_edits()
+		"cabin":
+			return _cabin_template_edits()
+		"beacon_tower":
+			return _beacon_tower_template_edits()
+		"signpost":
+			return _signpost_template_edits()
+	var edits := []
+	var block_id := current_block()
+	for raw in _placement_cells():
+		var cell: Vector3i = raw
+		edits.append({"pos": cell, "id": block_id})
+	return edits
+
+func _edit_cells(edits: Array) -> Array:
+	var cells := []
+	for raw in edits:
+		var edit: Dictionary = raw
+		cells.append(edit.get("pos", Vector3i.ZERO))
+	return cells
+
+func _bulk_feedback_cell(edits: Array) -> Vector3i:
+	if edits.is_empty():
+		return _place
+	var sum := Vector3.ZERO
+	for raw in edits:
+		var edit: Dictionary = raw
+		var c: Vector3i = edit.get("pos", _place)
+		sum += Vector3(c)
+	var avg := sum / float(edits.size())
+	return Vector3i(roundi(avg.x), roundi(avg.y), roundi(avg.z))
+
+func _bulk_feedback_block_id(edits: Array) -> int:
+	if edits.is_empty():
+		return current_block()
+	match build_template_id():
+		"bridge", "cabin":
+			return BlockLibrary.PLANKS
+		"garden":
+			return BlockLibrary.GRASS
+		"beacon_tower":
+			return BlockLibrary.MOONSTONE_LAMP
+		"signpost":
+			return BlockLibrary.LOG
+	var first: Dictionary = edits[0]
+	return int(first.get("id", current_block()))
+
+func _cell_edits(cells: Array, block_id: int) -> Array:
+	var edits := []
+	for raw in cells:
+		var cell: Vector3i = raw
+		edits.append({"pos": cell, "id": block_id})
+	return edits
+
+func _template_uses_fixed_blocks() -> bool:
+	return build_template_id() == "campfire" \
+		or build_template_id() == "bridge" \
+		or build_template_id() == "garden" \
+		or build_template_id() == "cabin" \
+		or build_template_id() == "beacon_tower" \
+		or build_template_id() == "signpost"
+
+func _break_cells() -> Array:
+	var radius := brush_radius()
+	if radius <= 0:
+		return [_target]
+	var axes := _brush_axes(_target_normal)
+	var axis_a: Vector3i = axes[0]
+	var axis_b: Vector3i = axes[1]
+	var cells := []
+	for b in range(-radius, radius + 1):
+		for a in range(-radius, radius + 1):
+			cells.append(_target + axis_a * a + axis_b * b)
+	return cells
+
+func _preview_center(cells: Array) -> Vector3:
+	if cells.is_empty():
+		return Vector3(_place) + Vector3(0.5, 0.5, 0.5)
+	var sum := Vector3.ZERO
+	for cell in cells:
+		var c: Vector3i = cell
+		sum += Vector3(c) + Vector3(0.5, 0.5, 0.5)
+	return sum / float(cells.size())
+
+func _update_placement_preview_mesh(node: MeshInstance3D, edits: Array, origin: Vector3, blocked: bool, alpha: float = 0.42) -> void:
+	var key := _placement_preview_key(edits)
+	if blocked and key == _blocked_preview_mesh_key:
+		return
+	if not blocked and key == _preview_mesh_key:
+		return
+	if blocked:
+		_blocked_preview_mesh_key = key
+	else:
+		_preview_mesh_key = key
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_material(_blocked_preview_material if blocked else _preview_material)
+	var half := Vector3(0.47, 0.47, 0.47)
+	for raw in edits:
+		var edit: Dictionary = raw
+		var c: Vector3i = edit.get("pos", Vector3i.ZERO)
+		var id := int(edit.get("id", current_block()))
+		var center := Vector3(c) + Vector3(0.5, 0.5, 0.5) - origin
+		var color := Color(1, 1, 1, alpha) if blocked else _preview_color_for_block(id, alpha)
+		_add_box_mesh(st, center - half, center + half, color)
+	node.mesh = st.commit()
+
+func _update_blocked_placement_preview(cells: Array, origin: Vector3, multi: bool) -> void:
+	if cells.is_empty():
+		placement_blocked_preview.visible = false
+		placement_blocked_preview.mesh = null
+		_blocked_preview_mesh_key = ""
+		return
+	var alpha := 0.34 if multi else 0.50
+	_blocked_preview_material.albedo_color = Color(1.0, 0.12, 0.10, alpha)
+	_blocked_preview_material.emission = _blocked_preview_material.albedo_color
+	_update_placement_preview_mesh(placement_blocked_preview, _cell_edits(cells, current_block()), origin, true, alpha)
+	placement_blocked_preview.global_position = origin
+	placement_blocked_preview.scale = Vector3.ONE
+	placement_blocked_preview.visible = true
+
+func _placement_preview_key(edits: Array) -> String:
+	var key := ""
+	for raw in edits:
+		var edit: Dictionary = raw
+		var c: Vector3i = edit.get("pos", Vector3i.ZERO)
+		key += "%d,%d,%d:%d|" % [c.x, c.y, c.z, int(edit.get("id", current_block()))]
+	return key
+
+func _update_brush_preview_lines(cells: Array, ok: bool) -> void:
+	if brush_preview_lines == null:
+		return
+	if not overlays_visible or cells.size() <= 1:
+		brush_preview_lines.visible = false
+		brush_preview_lines.mesh = null
+		return
+	if world != null and not brush_preview_lines.is_inside_tree():
+		world.add_child(brush_preview_lines)
+	var col := Color(0.78, 1.0, 0.38, 0.94) if ok else Color(1.0, 0.18, 0.12, 0.96)
+	_brush_line_material.albedo_color = col
+	_brush_line_material.emission = Color(col.r, col.g, col.b) * 0.8
+	var origin := _preview_center(cells)
+	brush_preview_lines.global_position = origin
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_material(_brush_line_material)
+	for cell in cells:
+		var c: Vector3i = cell
+		for segment in _cell_face_segments(c, _target_normal):
+			var pair: Array = segment
+			var a: Vector3 = pair[0]
+			var b: Vector3 = pair[1]
+			_add_brush_bar(st, a - origin, b - origin)
+	brush_preview_lines.mesh = st.commit()
+	brush_preview_lines.visible = true
+
+func _cell_face_segments(cell: Vector3i, normal: Vector3i) -> Array:
+	var p := Vector3(cell)
+	var a := Vector3.ZERO
+	var b := Vector3.ZERO
+	var c := Vector3.ZERO
+	var d := Vector3.ZERO
+	var inset := 0.025
+	if abs(normal.y) > 0:
+		var y := p.y + (1.0 + inset if normal.y > 0 else -inset)
+		a = Vector3(p.x, y, p.z)
+		b = Vector3(p.x + 1.0, y, p.z)
+		c = Vector3(p.x + 1.0, y, p.z + 1.0)
+		d = Vector3(p.x, y, p.z + 1.0)
+	elif abs(normal.x) > 0:
+		var x := p.x + (1.0 + inset if normal.x > 0 else -inset)
+		a = Vector3(x, p.y, p.z)
+		b = Vector3(x, p.y + 1.0, p.z)
+		c = Vector3(x, p.y + 1.0, p.z + 1.0)
+		d = Vector3(x, p.y, p.z + 1.0)
+	else:
+		var z := p.z + (1.0 + inset if normal.z > 0 else -inset)
+		a = Vector3(p.x, p.y, z)
+		b = Vector3(p.x + 1.0, p.y, z)
+		c = Vector3(p.x + 1.0, p.y + 1.0, z)
+		d = Vector3(p.x, p.y + 1.0, z)
+	return [[a, b], [b, c], [c, d], [d, a]]
+
+func _add_brush_bar(st: SurfaceTool, a: Vector3, b: Vector3) -> void:
+	var delta := b - a
+	var length := delta.length()
+	if length <= 0.001:
+		return
+	var thickness := 0.06
+	var scale := Vector3(thickness, thickness, thickness)
+	if absf(delta.x) >= absf(delta.y) and absf(delta.x) >= absf(delta.z):
+		scale.x = length
+	elif absf(delta.y) >= absf(delta.x) and absf(delta.y) >= absf(delta.z):
+		scale.y = length
+	else:
+		scale.z = length
+	var center := (a + b) * 0.5
+	var half := scale * 0.5
+	_add_box_mesh(st, center - half, center + half)
+
+func _add_box_mesh(st: SurfaceTool, min_v: Vector3, max_v: Vector3, color: Color = Color(1, 1, 1, 1)) -> void:
+	var v := [
+		Vector3(min_v.x, min_v.y, min_v.z), Vector3(max_v.x, min_v.y, min_v.z),
+		Vector3(max_v.x, max_v.y, min_v.z), Vector3(min_v.x, max_v.y, min_v.z),
+		Vector3(min_v.x, min_v.y, max_v.z), Vector3(max_v.x, min_v.y, max_v.z),
+		Vector3(max_v.x, max_v.y, max_v.z), Vector3(min_v.x, max_v.y, max_v.z),
+	]
+	var idx := [
+		0, 1, 2, 0, 2, 3,
+		5, 4, 7, 5, 7, 6,
+		4, 0, 3, 4, 3, 7,
+		1, 5, 6, 1, 6, 2,
+		3, 2, 6, 3, 6, 7,
+		4, 5, 1, 4, 1, 0,
+	]
+	for i in idx:
+		st.set_color(color)
+		st.add_vertex(v[i])
+
+func _preview_color_for_block(block_id: int, alpha: float) -> Color:
+	var col := Color(0.05, 1.0, 0.92, 1.0)
+	if lib != null and lib.has_method("preview_color"):
+		col = lib.preview_color(block_id)
+	col.a = alpha
+	return col
+
+func _brush_axes(normal: Vector3i) -> Array:
+	if abs(normal.y) > 0:
+		return [Vector3i.RIGHT, Vector3i(0, 0, 1)]
+	if abs(normal.x) > 0:
+		return [Vector3i(0, 1, 0), Vector3i(0, 0, 1)]
+	return [Vector3i.RIGHT, Vector3i(0, 1, 0)]
+
+func _template_cells() -> Array:
+	match build_template_id():
+		"platform":
+			return _platform_template_cells()
+		"pillar":
+			return _pillar_template_cells()
+		"arch":
+			return _arch_template_cells()
+		"wall":
+			return _wall_template_cells()
+		"stairs":
+			return _stairs_template_cells()
+		"room_frame":
+			return _room_frame_template_cells()
+		"cabin":
+			return _cabin_template_cells()
+		"campfire":
+			return _campfire_template_cells()
+		"bridge":
+			return _bridge_template_cells()
+		"garden":
+			return _garden_template_cells()
+		"beacon_tower":
+			return _beacon_tower_template_cells()
+		"signpost":
+			return _signpost_template_cells()
+		_:
+			return []
+
+func _platform_template_cells() -> Array:
+	var axes := _brush_axes(_target_normal)
+	var axis_a: Vector3i = axes[0]
+	var axis_b: Vector3i = axes[1]
+	var cells := []
+	for b in range(-2, 3):
+		for a in range(-2, 3):
+			cells.append(_place + axis_a * a + axis_b * b)
+	return cells
+
+func _pillar_template_cells() -> Array:
+	var cells := []
+	for y in range(0, 5):
+		cells.append(_place + Vector3i.UP * y)
+	return cells
+
+func _arch_template_cells() -> Array:
+	var right := _template_right_axis()
+	var up := Vector3i.UP
+	var cells := []
+	for y in range(0, 4):
+		cells.append(_place + right * -2 + up * y)
+		cells.append(_place + right * 2 + up * y)
+	for x in range(-2, 3):
+		cells.append(_place + right * x + up * 4)
+	return cells
+
+func _wall_template_cells() -> Array:
+	var right := _template_right_axis()
+	var up := Vector3i.UP
+	var cells := []
+	for y in range(0, 3):
+		for x in range(-2, 3):
+			cells.append(_place + right * x + up * y)
+	return cells
+
+func _stairs_template_cells() -> Array:
+	var right := _template_right_axis()
+	var forward := _template_depth_axis()
+	var up := Vector3i.UP
+	var cells := []
+	for step in range(0, 5):
+		for y in range(0, step + 1):
+			for x in range(-1, 2):
+				cells.append(_place + right * x + forward * step + up * y)
+	return cells
+
+func _room_frame_template_cells() -> Array:
+	var right := _template_right_axis()
+	var depth := _template_depth_axis()
+	var up := Vector3i.UP
+	var cells := []
+	for sx in [-3, 3]:
+		for sz in [-3, 3]:
+			for y in range(0, 4):
+				cells.append(_place + right * sx + depth * sz + up * y)
+	for x in range(-3, 4):
+		cells.append(_place + right * x + depth * -3 + up * 4)
+		cells.append(_place + right * x + depth * 3 + up * 4)
+	for z in range(-2, 3):
+		cells.append(_place + right * -3 + depth * z + up * 4)
+		cells.append(_place + right * 3 + depth * z + up * 4)
+	return cells
+
+func _cabin_template_cells() -> Array:
+	return _edit_cells(_cabin_template_edits())
+
+func _cabin_template_edits() -> Array:
+	var right := _template_right_axis()
+	var depth := _template_depth_axis()
+	var up := Vector3i.UP
+	var edits := []
+	var seen := {}
+	for z in range(-3, 4):
+		for x in range(-3, 4):
+			_add_template_edit(edits, seen, _place + right * x + depth * z, BlockLibrary.PLANKS)
+	for y in range(1, 4):
+		for z in range(-3, 4):
+			for x in range(-3, 4):
+				if abs(x) != 3 and abs(z) != 3:
+					continue
+				if z == -3 and x == 0 and y <= 2:
+					continue
+				var id := BlockLibrary.PLANKS
+				if abs(x) == 3 and abs(z) == 3:
+					id = BlockLibrary.LOG
+				elif y == 2 and ((abs(x) == 3 and z == 0) or (z == 3 and x == 0) or (z == -3 and abs(x) == 1)):
+					id = BlockLibrary.GLASS
+				_add_template_edit(edits, seen, _place + right * x + depth * z + up * y, id)
+	for z in range(-4, 5):
+		for x in range(-4, 5):
+			var ax := absi(x)
+			var y := 4
+			if ax <= 1:
+				y = 6
+			elif ax <= 3:
+				y = 5
+			_add_template_edit(edits, seen, _place + right * x + depth * z + up * y, BlockLibrary.BRICK)
+	for x in range(-1, 2):
+		_add_template_edit(edits, seen, _place + right * x + depth * -4, BlockLibrary.COBBLE)
+	_add_template_edit(edits, seen, _place + up * 3, BlockLibrary.LANTERN)
+	return edits
+
+func _add_template_edit(edits: Array, seen: Dictionary, pos: Vector3i, id: int) -> void:
+	var key := "%d,%d,%d" % [pos.x, pos.y, pos.z]
+	if seen.has(key):
+		return
+	seen[key] = true
+	edits.append({"pos": pos, "id": id})
+
+func _campfire_template_cells() -> Array:
+	return _edit_cells(_campfire_template_edits())
+
+func _campfire_template_edits() -> Array:
+	var right := _template_right_axis()
+	var depth := _template_depth_axis()
+	var up := Vector3i.UP
+	return [
+		{"pos": _place, "id": BlockLibrary.MOONSTONE_LAMP},
+		{"pos": _place + up, "id": BlockLibrary.LANTERN},
+		{"pos": _place + right, "id": BlockLibrary.LOG},
+		{"pos": _place - right, "id": BlockLibrary.LOG},
+		{"pos": _place + depth, "id": BlockLibrary.LOG},
+		{"pos": _place - depth, "id": BlockLibrary.LOG},
+		{"pos": _place + right + depth, "id": BlockLibrary.COBBLE},
+		{"pos": _place + right - depth, "id": BlockLibrary.COBBLE},
+		{"pos": _place - right + depth, "id": BlockLibrary.COBBLE},
+		{"pos": _place - right - depth, "id": BlockLibrary.COBBLE},
+	]
+
+func _bridge_template_cells() -> Array:
+	return _edit_cells(_bridge_template_edits())
+
+func _bridge_template_edits() -> Array:
+	var right := _template_right_axis()
+	var depth := _template_depth_axis()
+	var up := Vector3i.UP
+	var edits := []
+	for z in range(-3, 4):
+		for x in range(-1, 2):
+			edits.append({"pos": _place + right * x + depth * z, "id": BlockLibrary.PLANKS})
+		edits.append({"pos": _place + right * -2 + depth * z + up, "id": BlockLibrary.LOG})
+		edits.append({"pos": _place + right * 2 + depth * z + up, "id": BlockLibrary.LOG})
+	for sx in [-2, 2]:
+		for sz in [-3, 3]:
+			edits.append({"pos": _place + right * sx + depth * sz + up * 2, "id": BlockLibrary.LANTERN})
+	return edits
+
+func _garden_template_cells() -> Array:
+	return _edit_cells(_garden_template_edits())
+
+func _garden_template_edits() -> Array:
+	var right := _template_right_axis()
+	var depth := _template_depth_axis()
+	var up := Vector3i.UP
+	var edits := []
+	for z in range(-2, 3):
+		for x in range(-2, 3):
+			var id := BlockLibrary.CLAY if abs(x) == 2 or abs(z) == 2 else BlockLibrary.GRASS
+			edits.append({"pos": _place + right * x + depth * z, "id": id})
+	var plant_plan := [
+		{"x": 0, "z": 0, "id": BlockLibrary.RED_MUSHROOM},
+		{"x": -1, "z": 0, "id": BlockLibrary.WILDFLOWER},
+		{"x": 1, "z": 0, "id": BlockLibrary.WILDFLOWER},
+		{"x": 0, "z": -1, "id": BlockLibrary.WILDFLOWER},
+		{"x": 0, "z": 1, "id": BlockLibrary.WILDFLOWER},
+		{"x": -1, "z": -1, "id": BlockLibrary.TALL_GRASS},
+		{"x": 1, "z": -1, "id": BlockLibrary.TALL_GRASS},
+		{"x": -1, "z": 1, "id": BlockLibrary.TALL_GRASS},
+		{"x": 1, "z": 1, "id": BlockLibrary.TALL_GRASS},
+	]
+	for raw in plant_plan:
+		var item: Dictionary = raw
+		edits.append({"pos": _place + right * int(item["x"]) + depth * int(item["z"]) + up, "id": int(item["id"])})
+	return edits
+
+func _beacon_tower_template_cells() -> Array:
+	return _edit_cells(_beacon_tower_template_edits())
+
+func _beacon_tower_template_edits() -> Array:
+	var right := _template_right_axis()
+	var depth := _template_depth_axis()
+	var up := Vector3i.UP
+	var edits := []
+	for z in range(-2, 3):
+		for x in range(-2, 3):
+			var base_id := BlockLibrary.COBBLE if abs(x) == 2 or abs(z) == 2 else BlockLibrary.MOSSY_STONE
+			edits.append({"pos": _place + right * x + depth * z, "id": base_id})
+	for y in range(1, 5):
+		for sx in [-1, 1]:
+			for sz in [-1, 1]:
+				edits.append({"pos": _place + right * sx + depth * sz + up * y, "id": BlockLibrary.MARBLE})
+		for side in [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]:
+			var wall_id := BlockLibrary.GLASS if y == 2 or y == 3 else BlockLibrary.MARBLE
+			edits.append({"pos": _place + right * side.x + depth * side.y + up * y, "id": wall_id})
+	for z in range(-1, 2):
+		for x in range(-1, 2):
+			var deck_id := BlockLibrary.MOONSTONE_LAMP if x == 0 and z == 0 else BlockLibrary.GLASS
+			edits.append({"pos": _place + right * x + depth * z + up * 5, "id": deck_id})
+	edits.append({"pos": _place + up * 6, "id": BlockLibrary.LANTERN})
+	for side in [Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1), Vector2i(-1, 0), Vector2i(1, 0), Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 1)]:
+		edits.append({"pos": _place + right * side.x + depth * side.y + up * 6, "id": BlockLibrary.BRICK})
+	edits.append({"pos": _place + up * 7, "id": BlockLibrary.BRICK})
+	return edits
+
+func _signpost_template_cells() -> Array:
+	return _edit_cells(_signpost_template_edits())
+
+func _signpost_template_edits() -> Array:
+	var right := _template_right_axis()
+	var depth := _template_depth_axis()
+	var up := Vector3i.UP
+	return [
+		{"pos": _place, "id": BlockLibrary.MOSSY_STONE},
+		{"pos": _place + right, "id": BlockLibrary.COBBLE},
+		{"pos": _place - right, "id": BlockLibrary.COBBLE},
+		{"pos": _place + depth, "id": BlockLibrary.COBBLE},
+		{"pos": _place - depth, "id": BlockLibrary.COBBLE},
+		{"pos": _place + up, "id": BlockLibrary.LOG},
+		{"pos": _place + up * 2, "id": BlockLibrary.LOG},
+		{"pos": _place + up * 3, "id": BlockLibrary.LOG},
+		{"pos": _place + right * -1 + up * 3, "id": BlockLibrary.PLANKS},
+		{"pos": _place + right + up * 3, "id": BlockLibrary.PLANKS},
+		{"pos": _place + right * 2 + up * 3, "id": BlockLibrary.PLANKS},
+		{"pos": _place - depth + up * 2, "id": BlockLibrary.LANTERN},
+		{"pos": _place + up * 4, "id": BlockLibrary.MOONSTONE_LAMP},
+	]
+
+func _template_right_axis() -> Vector3i:
+	return Vector3i.RIGHT if template_orientation_index == 0 else Vector3i(0, 0, 1)
+
+func _template_depth_axis() -> Vector3i:
+	return Vector3i(0, 0, 1) if template_orientation_index == 0 else Vector3i.RIGHT
+
+func _normal_to_cell(normal: Vector3) -> Vector3i:
+	var ax := absf(normal.x)
+	var ay := absf(normal.y)
+	var az := absf(normal.z)
+	if ax >= ay and ax >= az:
+		return Vector3i(1 if normal.x >= 0.0 else -1, 0, 0)
+	if ay >= ax and ay >= az:
+		return Vector3i(0, 1 if normal.y >= 0.0 else -1, 0)
+	return Vector3i(0, 0, 1 if normal.z >= 0.0 else -1)
+
+func _hide_build_overlays() -> void:
+	if highlight != null:
+		highlight.visible = false
+	if placement_preview != null:
+		placement_preview.visible = false
+	if placement_blocked_preview != null:
+		placement_blocked_preview.visible = false
+	if brush_preview_lines != null:
+		brush_preview_lines.visible = false
+
+func _place_blocked_reason(cell: Vector3i) -> String:
+	if world == null or lib == null:
+		return "无法放置"
+	if cell.y < 0 or cell.y >= Chunk.SY:
+		return "超出建造高度"
+	if _blocked_by_self(cell):
+		return "会卡住玩家"
+	var existing: int = world.get_block(cell.x, cell.y, cell.z)
+	if existing != BlockLibrary.AIR and lib.is_solid(existing):
+		return "目标格已占用"
+	return ""
+
+func _blocked_by_self(cell: Vector3i) -> bool:
+	var p := global_position
+	return cell.x >= floori(p.x - 0.35) and cell.x <= floori(p.x + 0.35) \
+		and cell.z >= floori(p.z - 0.35) and cell.z <= floori(p.z + 0.35) \
+		and cell.y >= floori(p.y) and cell.y <= floori(p.y + 1.7)
+
+func _free_overlay_node(node: Node) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var parent := node.get_parent()
+	if parent != null:
+		parent.remove_child(node)
+	node.free()
+
+# ---------- 方块小人 Avatar ----------
+func _make_avatar() -> Node3D:
+	var root := Node3D.new()
+	var skin := Color(0.86, 0.68, 0.54)
+	var hair := Color(0.12, 0.08, 0.04)
+	var eye := Color(0.05, 0.06, 0.08)
+	var shirt := Color(0.20, 0.50, 0.80)
+	var pants := Color(0.26, 0.27, 0.38)
+	root.add_child(_box(Vector3(0.5, 0.5, 0.5), Vector3(0, 1.45, 0), skin))       # 头
+	root.add_child(_box(Vector3(0.52, 0.16, 0.52), Vector3(0, 1.64, 0), hair))     # 头发
+	root.add_child(_box(Vector3(0.07, 0.07, 0.025), Vector3(-0.11, 1.48, -0.265), eye))
+	root.add_child(_box(Vector3(0.07, 0.07, 0.025), Vector3(0.11, 1.48, -0.265), eye))
+	root.add_child(_box(Vector3(0.5, 0.62, 0.28), Vector3(0, 0.94, 0), shirt))    # 身体
+	# 四肢用关节(pivot)挂在肩/胯，绕 X 轴摆动 = 走路动画（不再是钉死的方块）
+	_arm_l = _limb_pivot(Vector3(-0.34, 1.25, 0), Vector3(0.18, 0.62, 0.22), shirt)
+	_arm_r = _limb_pivot(Vector3(0.34, 1.25, 0), Vector3(0.18, 0.62, 0.22), shirt)
+	_leg_l = _limb_pivot(Vector3(-0.13, 0.64, 0), Vector3(0.22, 0.64, 0.24), pants)
+	_leg_r = _limb_pivot(Vector3(0.13, 0.64, 0), Vector3(0.22, 0.64, 0.24), pants)
+	root.add_child(_arm_l); root.add_child(_arm_r)
+	root.add_child(_leg_l); root.add_child(_leg_r)
+	# 披风：挂在上背关节，站立下垂、飞行后扬抖动（超人红）
+	_cape = Node3D.new()
+	_cape.position = Vector3(0, 1.28, 0.17)
+	_cape.add_child(_box(Vector3(0.46, 0.72, 0.05), Vector3(0, -0.36, 0), Color(0.72, 0.10, 0.10)))
+	root.add_child(_cape)
+	return root
+
+# 关节肢体：pivot 在关节(肩/胯)，盒子挂在 pivot 正下方半长 -> 绕 pivot 摆动自然。
+func _limb_pivot(joint: Vector3, size: Vector3, col: Color) -> Node3D:
+	var pivot := Node3D.new()
+	pivot.position = joint
+	pivot.add_child(_box(size, Vector3(0, -size.y * 0.5, 0), col))
+	return pivot
+
+# 走路循环：腿前后摆、手反向摆，整体随步幅轻微起伏；幅度随移动平滑淡入淡出。
+func _animate_avatar(delta: float, walking: bool, running: bool) -> void:
+	if avatar == null:
+		return
+	_anim_t += delta
+	_anim_amount = lerpf(_anim_amount, 1.0 if walking else 0.0, minf(delta * 10.0, 1.0))
+	_fly_amount = lerpf(_fly_amount, 1.0 if fly else 0.0, minf(delta * 6.0, 1.0))
+	var swing := sin(_bob) * _anim_amount
+	var leg := swing * (0.85 if running else 0.68)
+	var arm := swing * (0.62 if running else 0.48)
+	var flutter := sin(_anim_t * 9.0) * 0.16
+	# 身体：地面直立；飞行时前倾近水平（超人姿态）
+	avatar.rotation.x = lerpf(0.0, -1.35, _fly_amount)
+	avatar.position.y = absf(sin(_bob)) * 0.045 * _anim_amount + lerpf(0.0, 0.2, _fly_amount)
+	# 腿：走路前后交替；飞行并直后拖
+	if _leg_l != null: _leg_l.rotation.x = lerpf(leg, -0.06, _fly_amount)
+	if _leg_r != null: _leg_r.rotation.x = lerpf(-leg, -0.16, _fly_amount)
+	# 手：走路反向摆；飞行右臂前伸(超人拳)、左臂贴身
+	if _arm_l != null: _arm_l.rotation.x = lerpf(-arm, 0.4, _fly_amount)
+	if _arm_r != null: _arm_r.rotation.x = lerpf(arm, -2.8, _fly_amount)
+	# 披风：站立微摆下垂；飞行后扬 + 抖动
+	if _cape != null:
+		var cape_ground := 0.16 + sin(_bob) * 0.06 * _anim_amount
+		_cape.rotation.x = lerpf(cape_ground, -1.75 + flutter, _fly_amount)
+	# 放波瞬间：双手前推（龟派气功波收招姿）
+	if _kame_fire_t > 0.0:
+		if _arm_l != null: _arm_l.rotation.x = -2.55
+		if _arm_r != null: _arm_r.rotation.x = -2.55
+
+# ---------- 隐藏技能：龟派气功波 ----------
+# 飞行中依次按出 KAMEHAMEHA 的字母即触发。
+func _kame_combo_key(code: int) -> void:
+	if not fly:
+		_combo = ""
+		return
+	if code < KEY_A or code > KEY_Z:
+		return
+	_combo += char(code)
+	if _combo.length() > 14:
+		_combo = _combo.right(14)
+	if _combo.ends_with(KAMEHAMEHA_SEQ) and _kame_cooldown <= 0.0:
+		_combo = ""
+		_fire_kamehameha()
+
+func _aim_dir() -> Vector3:
+	return (global_transform.basis * (Basis(Vector3.RIGHT, pitch) * Vector3(0, 0, -1))).normalized()
+
+func _fire_kamehameha() -> void:
+	if world == null:
+		return
+	_kame_cooldown = 2.5
+	_kame_fire_t = 0.8
+	var aim := _aim_dir()
+	var from: Vector3 = spring.global_position + aim * 1.2
+	_clear_beam_volume(from, aim)
+	_spawn_beam_visual(from, aim)
+	action_feedback.emit("mode", "龟・派・气・功・波！")
+
+# 沿气功波清出一条圆柱（球串）形的空腔。
+func _clear_beam_volume(from: Vector3, aim: Vector3) -> void:
+	var offsets := _sphere_offsets(KAME_RADIUS)
+	var seen := {}
+	var t := 3.0
+	while t <= float(KAME_LENGTH):
+		var c := from + aim * t
+		var bx := int(floor(c.x)); var by := int(floor(c.y)); var bz := int(floor(c.z))
+		for o in offsets:
+			seen[Vector3i(bx + o.x, by + o.y, bz + o.z)] = true
+		t += float(KAME_RADIUS) * 0.7
+	var edits := []
+	for p in seen:
+		edits.append({"pos": p, "id": 0})
+	if not edits.is_empty():
+		world.request_block_edits(edits)
+
+func _sphere_offsets(r: int) -> Array:
+	if not _kame_offsets.is_empty():
+		return _kame_offsets
+	var rr := r * r
+	for dx in range(-r, r + 1):
+		for dy in range(-r, r + 1):
+			for dz in range(-r, r + 1):
+				if dx * dx + dy * dy + dz * dz <= rr:
+					_kame_offsets.append(Vector3i(dx, dy, dz))
+	return _kame_offsets
+
+func _spawn_beam_visual(from: Vector3, aim: Vector3) -> void:
+	var host := get_parent()
+	if host == null:
+		return
+	var node := Node3D.new()
+	host.add_child(node)
+	node.global_position = from
+	var up := Vector3.UP
+	if absf(aim.dot(Vector3.UP)) > 0.99:
+		up = Vector3.FORWARD
+	node.look_at(from + aim, up)
+	node.add_child(_beam_box(float(KAME_RADIUS) * 1.5, float(KAME_LENGTH), Color(0.30, 0.70, 1.0), 2.4, 0.42))
+	node.add_child(_beam_box(float(KAME_RADIUS) * 0.7, float(KAME_LENGTH), Color(0.88, 0.97, 1.0), 6.0, 0.95))
+	var ball := _beam_ball(float(KAME_RADIUS) * 1.7, Color(0.6, 0.9, 1.0), 5.0)
+	ball.position.z = -float(KAME_LENGTH)
+	node.add_child(ball)
+	node.scale = Vector3(0.15, 0.15, 0.02)
+	var tw := node.create_tween()
+	tw.tween_property(node, "scale", Vector3.ONE, 0.16).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(0.42)
+	tw.tween_property(node, "scale", Vector3(1.7, 1.7, 1.0), 0.28).set_ease(Tween.EASE_IN)
+	tw.tween_callback(node.queue_free)
+
+func _beam_box(radius: float, length: float, col: Color, energy: float, alpha: float) -> MeshInstance3D:
+	var bm := BoxMesh.new()
+	bm.size = Vector3(radius * 2.0, radius * 2.0, length)
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	m.albedo_color = Color(col.r, col.g, col.b, alpha)
+	m.emission_enabled = true
+	m.emission = col
+	m.emission_energy_multiplier = energy
+	bm.material = m
+	var mi := MeshInstance3D.new()
+	mi.mesh = bm
+	mi.position = Vector3(0, 0, -length * 0.5)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
+
+func _beam_ball(radius: float, col: Color, energy: float) -> MeshInstance3D:
+	var sm := SphereMesh.new()
+	sm.radius = radius
+	sm.height = radius * 2.0
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	m.albedo_color = Color(col.r, col.g, col.b, 0.85)
+	m.emission_enabled = true
+	m.emission = col
+	m.emission_energy_multiplier = energy
+	sm.material = m
+	var mi := MeshInstance3D.new()
+	mi.mesh = sm
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
+
+func _box(size: Vector3, pos: Vector3, col: Color) -> MeshInstance3D:
+	var bm := BoxMesh.new()
+	bm.size = size
+	var m := StandardMaterial3D.new()
+	m.albedo_color = col
+	bm.material = m
+	var mi := MeshInstance3D.new()
+	mi.mesh = bm
+	mi.position = pos
+	return mi
+
+# ---------- 瞄准框（方块描边）----------
+func _make_highlight() -> MeshInstance3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(1.0, 0.86, 0.28, 0.95)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var c := 0.502
+	var v := [
+		Vector3(-c, -c, -c), Vector3(c, -c, -c), Vector3(c, -c, c), Vector3(-c, -c, c),
+		Vector3(-c, c, -c), Vector3(c, c, -c), Vector3(c, c, c), Vector3(-c, c, c)]
+	var edges := [0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7]
+	var im := ImmediateMesh.new()
+	im.surface_begin(Mesh.PRIMITIVE_LINES, mat)
+	for e in edges:
+		im.surface_add_vertex(v[e])
+	im.surface_end()
+	var mi := MeshInstance3D.new()
+	mi.mesh = im
+	mi.visible = false
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
+
+func _make_placement_preview() -> MeshInstance3D:
+	_preview_material = StandardMaterial3D.new()
+	_preview_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_preview_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_preview_material.albedo_color = Color(0.05, 1.0, 0.92, 0.42)
+	_preview_material.emission_enabled = true
+	_preview_material.emission = Color(0.05, 1.0, 0.92, 0.42)
+	_preview_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_preview_material.vertex_color_use_as_albedo = true
+
+	_preview_box_mesh = BoxMesh.new()
+	_preview_box_mesh.size = Vector3(0.94, 0.94, 0.94)
+	var mi := MeshInstance3D.new()
+	mi.mesh = _preview_box_mesh
+	mi.material_override = _preview_material
+	mi.visible = false
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
+
+func _make_blocked_placement_preview() -> MeshInstance3D:
+	_blocked_preview_material = StandardMaterial3D.new()
+	_blocked_preview_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_blocked_preview_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_blocked_preview_material.albedo_color = Color(1.0, 0.12, 0.10, 0.50)
+	_blocked_preview_material.emission_enabled = true
+	_blocked_preview_material.emission = Color(1.0, 0.12, 0.10, 0.50)
+	_blocked_preview_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+	var mi := MeshInstance3D.new()
+	mi.name = "BlockedPlacementPreview"
+	mi.mesh = _preview_box_mesh
+	mi.material_override = _blocked_preview_material
+	mi.visible = false
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
+
+func _make_brush_preview_lines() -> MeshInstance3D:
+	_brush_line_material = StandardMaterial3D.new()
+	_brush_line_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_brush_line_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_brush_line_material.albedo_color = Color(0.78, 1.0, 0.38, 0.94)
+	_brush_line_material.emission_enabled = true
+	_brush_line_material.emission = Color(0.78, 1.0, 0.38) * 0.8
+	_brush_line_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+	var mi := MeshInstance3D.new()
+	mi.name = "BrushPreviewLines"
+	mi.visible = false
+	mi.extra_cull_margin = 512.0
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.material_override = _brush_line_material
+	return mi
