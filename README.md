@@ -70,6 +70,17 @@ godot --path . --script res://tests/shot_emissive.gd    # 夜间发光
 godot --path . --script res://tests/shot_biomes.gd      # 群系俯瞰
 ```
 
+## 📦 打包发布
+
+macOS（universal：Apple Silicon 原生 + Intel）一条命令导出 + 签名：
+
+```bash
+bash packaging/build_macos.sh        # 产出 build/macos/VoxelCraft-macos.zip（Developer ID 签名 + 硬化运行时）
+```
+
+拿到 Apple 公证凭证后可一键补公证（`NOTARY_PROFILE=… bash packaging/build_macos.sh`）。
+完整流程与 Windows/Linux 说明见 [`packaging/README.md`](packaging/README.md)。
+
 ## 🧩 架构（每个模块职责单一、可单独测）
 
 | 模块 | 文件 | 职责 |
@@ -89,7 +100,8 @@ godot --path . --script res://tests/shot_biomes.gd      # 群系俯瞰
 - ✅ **商用化打磨 Wave 1**（渲染地基 + 性能）：AO/SSAO/mipmap/自发光泛光/天空/抗锯齿；编辑卡顿修复；多线程；GPU 粒子；引擎配置
 - ✅ **商用化打磨 Wave 2**（内容 + UX）：新建材方块、二维群系/溶洞/矿物图鉴、统一主题、HUD 引导/准星、菜单过渡/设置、程序音频
 - ✅ **商用化打磨 Wave 3（核心）**：导出预设 `export_presets.cfg` + 品牌图标、运行期 InputMap（手柄/重绑定就绪，物理键兜底）、虚空重生兜底、程序化背景音乐 `MusicDirector` + 脚步/落地/落水音、天气环境声床
-- ⏭ Wave 3 余项（非阻断）：Boot autoload（世界切换健壮化）、`untyped_declaration` 告警清理、安装导出模板后实际打包各平台可执行档
+- ✅ **macOS 打包发布管道**：universal 导出 + Developer ID 签名 + 硬化运行时 + 时间戳，已实跑验证（`packaging/build_macos.sh`，公证待 Apple 凭证）
+- ⏭ Wave 3 余项（非阻断）：Boot autoload（世界切换健壮化）、`untyped_declaration` 告警清理、Windows/Linux 打包与签名
 - 全套逻辑自检：**41/41 通过**
 
 ## 📄 许可

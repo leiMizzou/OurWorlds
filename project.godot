@@ -21,6 +21,7 @@ window/vsync/vsync_mode=1
 [rendering]
 
 textures/default_filters/anisotropic_filtering_level=4
+textures/vram_compression/import_etc2_astc=true
 rendering/occlusion_culling/use_occlusion_culling=true
 anti_aliasing/quality/msaa_3d=2
 
