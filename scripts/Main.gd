@@ -25,6 +25,9 @@ const AgentBridge = preload("res://scripts/AgentBridge.gd")
 const AgentAvatar = preload("res://scripts/AgentAvatar.gd")
 const ChatHub = preload("res://scripts/ChatHub.gd")
 const ChatPanel = preload("res://scripts/ChatPanel.gd")
+const NetworkManager = preload("res://scripts/NetworkManager.gd")
+const RemoteAvatar = preload("res://scripts/RemoteAvatar.gd")
+const WorldData = preload("res://scripts/WorldData.gd")
 
 const DAY_LEN := 180.0   # 一个昼夜 180 秒
 const AUTO_SAVE_INTERVAL := 18.0
@@ -56,6 +59,8 @@ var world_map: WorldMap
 var photo_overlay: PhotoOverlay
 var chat_hub
 var chat_panel: ChatPanel
+var _net_mode: int = NetworkManager.Mode.OFFLINE
+var net_manager: NetworkManager
 
 var _sun: DirectionalLight3D
 var _env: Environment
@@ -131,6 +136,20 @@ func _ready() -> void:
 	world.name = "World"
 	add_child(world)
 	_current_seed = _initial_seed()
+	_net_mode = _detect_net_mode()
+	if _net_mode == NetworkManager.Mode.SERVER:
+		_start_dedicated_server()
+		return                                  # 纯服务器：不建玩家/HUD/渲染子系统
+	if _net_mode == NetworkManager.Mode.CLIENT:
+		_start_client_and_wait()                # 先连服务器，welcome 到了再建世界
+		return
+	# OFFLINE / HOST：立即进世界（HOST 进完再开服）
+	_enter_world(_current_seed, null)
+	if _net_mode == NetworkManager.Mode.HOST:
+		_start_host_after_enter()
+
+func _enter_world(seed_value: int, spawn_override) -> void:
+	_current_seed = seed_value
 	_setup_celestial_bodies()
 	var save_file := _save_path_for_seed(_current_seed)
 	world.setup(lib, _current_seed, save_file)
@@ -139,7 +158,7 @@ func _ready() -> void:
 		world.set_view_radius(int(OS.get_environment("VC_RADIUS")))
 	_apply_graphics_quality(_graphics_quality)
 
-	var spawn := _find_spawn_position()
+	var spawn: Vector3 = spawn_override if spawn_override is Vector3 else _find_spawn_position()
 	var t0 := Time.get_ticks_msec()
 	world.prime(world.chunk_of(int(spawn.x), int(spawn.z)), 1)
 	print("脚下区域就绪 ", Time.get_ticks_msec() - t0, " ms（其余边走边加载）")
@@ -272,7 +291,7 @@ func _ready() -> void:
 	title_screen.new_world_requested.connect(_start_new_world)
 	title_screen.delete_world_requested.connect(_delete_world_from_title)
 	title_screen.settings_requested.connect(_open_title_settings)
-	if OS.has_environment("VC_SKIP_TITLE"):
+	if OS.has_environment("VC_SKIP_TITLE") or _net_mode != NetworkManager.Mode.OFFLINE:
 		set_title_active(false)
 	else:
 		set_title_active(true)
@@ -302,6 +321,70 @@ func _setup_agent_bridge() -> void:
 	ai_avatar.global_position = player.global_position + Vector3(3, 0, 0)
 	bridge.avatar = ai_avatar
 	add_child(bridge)
+
+func _detect_net_mode() -> int:
+	if OS.has_environment("OW_SERVER"):
+		return NetworkManager.Mode.SERVER
+	if OS.has_environment("OW_HOST"):
+		return NetworkManager.Mode.HOST
+	if OS.has_environment("OW_CONNECT"):
+		return NetworkManager.Mode.CLIENT
+	return NetworkManager.Mode.OFFLINE
+
+func _net_port() -> int:
+	if OS.has_environment("OW_PORT"):
+		return int(OS.get_environment("OW_PORT"))
+	return NetworkManager.DEFAULT_PORT
+
+func _make_remote_avatar() -> Node3D:
+	return RemoteAvatar.new()
+
+func _start_dedicated_server() -> void:
+	# 纯权威服务器：只建 WorldData + NetworkManager，不建玩家/HUD/渲染。
+	var data := WorldData.new(_current_seed)
+	net_manager = NetworkManager.new()
+	net_manager.name = "NetworkManager"
+	net_manager.mode = NetworkManager.Mode.SERVER
+	net_manager.chat_hub = ChatHub.new()
+	var spawn := Vector3(0.5, data.surface_y(0, 0) + 3, 0.5)
+	net_manager.set_authority_data(data, _current_seed, spawn)
+	add_child(net_manager)
+	net_manager.start_server(_net_port())
+
+func _start_host_after_enter() -> void:
+	net_manager = NetworkManager.new()
+	net_manager.name = "NetworkManager"
+	net_manager.mode = NetworkManager.Mode.HOST
+	net_manager.world = world
+	net_manager.player = player
+	net_manager.chat_hub = chat_hub
+	net_manager.avatar_factory = _make_remote_avatar
+	net_manager.set_authority_data(world._data, _current_seed, player.global_position)
+	world.net = net_manager
+	add_child(net_manager)
+	net_manager.start_host(_net_port())
+
+func _start_client_and_wait() -> void:
+	net_manager = NetworkManager.new()
+	net_manager.name = "NetworkManager"
+	net_manager.mode = NetworkManager.Mode.CLIENT
+	net_manager.world = world
+	net_manager.avatar_factory = _make_remote_avatar
+	net_manager.welcomed.connect(_on_welcomed)
+	add_child(net_manager)
+	print("连接服务器中，等待入场 ...")   # 此刻 title_screen 还没建（在 _enter_world 里建），别调 set_title_active
+	net_manager.start_client(OS.get_environment("OW_CONNECT"))
+
+func _on_welcomed(payload: Dictionary) -> void:
+	# 服务器种子/出生点到了：建世界+玩家+子系统，并把 player 交给 net（位置上报）。
+	var sp: Array = payload.get("spawn", [0, 40, 0])
+	var spawn := Vector3(float(sp[0]), float(sp[1]), float(sp[2]))
+	_enter_world(int(payload.get("seed", _current_seed)), spawn)
+	world.net = net_manager
+	net_manager.player = player
+	net_manager.chat_hub = chat_hub
+	if payload.has("deltas"):
+		world.load_deltas_from_net(payload["deltas"])
 
 func _initial_seed() -> int:
 	if OS.has_environment("VC_SEED"):
