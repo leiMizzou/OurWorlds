@@ -136,8 +136,8 @@ func apply_welcome(payload: Dictionary) -> void:
 	var sp: Array = payload.get("spawn", [0, 0, 0])
 	if sp.size() == 3:
 		_spawn = Vector3(float(sp[0]), float(sp[1]), float(sp[2]))
-	if world != null and world.has_method("load_deltas_from_net"):
-		world.load_deltas_from_net(payload.get("deltas", {}))
+	# 增量不在这里加载：客户端收到 welcome 时世界还没 setup（world._data 仍为 null）。
+	# 真正的加载在 Main._on_welcomed 里 _enter_world 之后调用 world.load_deltas_from_net(deltas)。
 
 # 服务器：打包所有联机玩家的位置/朝向（HOST 下也含房主自己——房主也是一个 peer）。
 func build_player_snapshot() -> Array:
