@@ -59,6 +59,25 @@ func _initialize() -> void:
 	var after: Dictionary = rlnm.authorize_edit(50, 0, rsy + 1, 0, 0, 1000.0 + NetworkManager.EDIT_RATE_WINDOW + 0.5)
 	check(bool(after.get("ok", false)), "窗口滑过后频率恢复")
 
+	# ---- 入场握手：服务器打包 welcome，客户端套用后地形增量一致 ----
+	var srv := NetworkManager.new()
+	srv.mode = NetworkManager.Mode.SERVER
+	var sdata := WorldData.new(2024)
+	srv.set_authority_data(sdata, 2024, Vector3(4, sdata.surface_y(4, 4) + 2, 4))
+	var pe := srv.register_peer(20, "Carol")
+	srv.set_peer_transform(20, Vector3(4, sdata.surface_y(4, 4) + 1, 4), 0.0)
+	# 服务器上已有一处编辑
+	srv.authorize_edit(20, 4, sdata.surface_y(4, 4) + 1, 4, 3)
+	var welcome: Dictionary = srv.build_welcome(20)
+	check(int(welcome.get("seed", 0)) == 2024, "welcome 带服务器种子")
+	check(str(welcome.get("your_eid", "")) == pe, "welcome 带本端 eid")
+	check((welcome.get("deltas", {}) as Dictionary).size() == 1, "welcome 带 1 个脏区块增量")
+
+	# 客户端：用一个空 WorldData 套用 welcome 的增量，地形应一致
+	var cdata := WorldData.new(int(welcome["seed"]))
+	cdata.load_deltas(welcome["deltas"])
+	check(int(cdata.get_block(4, sdata.surface_y(4, 4) + 1, 4)) == 3, "客户端套用 welcome 后看到已有编辑")
+
 	if failed == 0: print("✅ ALL NETWORK CORE TESTS PASSED")
 	else: printerr("❌ ", failed, " 个网络核心测试失败")
 	quit(0 if failed == 0 else 1)

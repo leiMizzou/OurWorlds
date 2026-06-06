@@ -109,3 +109,28 @@ func _accept_rate(peer_id: int, now: float) -> bool:
 	keep.append(t)
 	_peers[peer_id]["edits"] = keep
 	return true
+
+# 服务器：给一个刚连进来的 peer 打包入场信息（种子+出生点+本端 eid+在线名册+全部增量）。
+# M1 世界小，直接发全部 delta；兴趣管理（按区块按需发）是 M5。
+func build_welcome(peer_id: int) -> Dictionary:
+	var roster := []
+	for pid in _peers:
+		var p: Dictionary = _peers[pid]
+		var pos: Vector3 = p["pos"]
+		roster.append({"eid": p["eid"], "name": p["name"], "pos": [pos.x, pos.y, pos.z]})
+	return {
+		"seed": _seed,
+		"spawn": [_spawn.x, _spawn.y, _spawn.z],
+		"your_eid": str(_peers.get(peer_id, {}).get("eid", "")),
+		"peers": roster,
+		"deltas": _data.all_deltas(),
+	}
+
+# 客户端：套用 welcome —— 用服务器种子建世界并载入增量。world 由 Main 在 CLIENT 模式下注入。
+func apply_welcome(payload: Dictionary) -> void:
+	_seed = int(payload.get("seed", 1337))
+	var sp: Array = payload.get("spawn", [0, 0, 0])
+	if sp.size() == 3:
+		_spawn = Vector3(float(sp[0]), float(sp[1]), float(sp[2]))
+	if world != null and world.has_method("load_deltas_from_net"):
+		world.load_deltas_from_net(payload.get("deltas", {}))
