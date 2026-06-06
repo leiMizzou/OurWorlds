@@ -72,7 +72,7 @@ func _theme_height(theme: int, wx: int, wz: int) -> int:
 		IslandTheme.BAY:
 			return BASE_Y - 4                                                       # 海湾低地（水下）
 		IslandTheme.TROPICAL:
-			return BASE_Y - (1 if _noise(wx >> 4, wz >> 4) < -0.3 else 0)           # 偶有浅滩
+			return BASE_Y - (4 if _noise(wx >> 4, wz >> 4) < -0.2 else 0)           # 低洼成浅海（< WATER_Y 才注水）
 		_:
 			return BASE_Y
 

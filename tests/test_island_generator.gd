@@ -45,8 +45,11 @@ func _initialize() -> void:
 	var snow_xz := [-IslandGenerator.HALF + 40, -IslandGenerator.HALF + 40]   # 北-西 = 雪山
 	check(top_block(g, snow_xz[0], snow_xz[1]) == BlockLibrary.SNOW, "雪山扇区地表=雪")
 	var desert_xz := [0, -IslandGenerator.HALF + 40]                          # 北-中 = 沙漠
-	var dtop := top_block(g, desert_xz[0], desert_xz[1])
-	check(dtop == BlockLibrary.SAND or dtop == BlockLibrary.RED_SAND, "沙漠扇区地表=沙/红沙")
+	check(top_block(g, desert_xz[0], desert_xz[1]) == BlockLibrary.SAND, "沙漠扇区地表=沙")
+	# 含水扇区（海湾）地表之上注水（验证 water 标志真的生效）
+	var bch := Chunk.new(chunk_coord(200), chunk_coord(200)); g.generate(bch)
+	check(bch.get_block(posmod(200, Chunk.SX), IslandGenerator.WATER_Y, posmod(200, Chunk.SZ)) == BlockLibrary.WATER, "海湾扇区水面有水")
+
 	var cyber_xz := [IslandGenerator.HALF - 40, 0]                            # 中-东 = 赛博
 	check(top_block(g, cyber_xz[0], cyber_xz[1]) == BlockLibrary.STEEL_BLOCK, "赛博扇区地基=钢块")
 	var obs_xz := [-IslandGenerator.HALF + 40, IslandGenerator.HALF - 40]     # 南-西 = 天文台
