@@ -392,10 +392,12 @@ func _make_remote_avatar() -> Node3D:
 
 func _start_dedicated_server() -> void:
 	# 纯权威服务器：只建 WorldData + NetworkManager，不建玩家/HUD/渲染。
-	var data := WorldData.new(_current_seed)
+	var server_kind := OS.get_environment("VC_WORLD_KIND") if OS.has_environment("VC_WORLD_KIND") else "infinite"
+	var data := WorldData.new(_current_seed, server_kind)
 	net_manager = NetworkManager.new()
 	net_manager.name = "NetworkManager"
 	net_manager.mode = NetworkManager.Mode.SERVER
+	net_manager.world_kind = server_kind
 	net_manager.chat_hub = ChatHub.new()
 	var spawn := Vector3(0.5, data.surface_y(0, 0) + 3, 0.5)
 	net_manager.set_authority_data(data, _current_seed, spawn)
@@ -422,6 +424,7 @@ func _start_host_after_enter() -> void:
 	net_manager.chat_hub = chat_hub
 	net_manager.avatar_factory = _make_remote_avatar
 	net_manager.set_authority_data(world._data, _current_seed, player.global_position)
+	net_manager.world_kind = world.world_kind()
 	world.net = net_manager
 	add_child(net_manager)
 	net_manager.start_host(_net_port())
@@ -439,6 +442,7 @@ func _start_client_and_wait() -> void:
 
 func _on_welcomed(payload: Dictionary) -> void:
 	# 服务器种子/出生点到了：建世界+玩家+子系统，并把 player 交给 net（位置上报）。
+	OS.set_environment("VC_WORLD_KIND", str(payload.get("kind", "infinite")))
 	var sp: Array = payload.get("spawn", [0, 40, 0])
 	var spawn := Vector3(float(sp[0]), float(sp[1]), float(sp[2]))
 	_enter_world(int(payload.get("seed", _current_seed)), spawn)

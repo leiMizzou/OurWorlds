@@ -135,7 +135,7 @@ func save_world(path: String) -> bool:
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
 		return false
-	f.store_string(JSON.stringify({"version": SAVE_VERSION, "seed": _seed, "edits": _data.all_deltas()}))
+	f.store_string(JSON.stringify({"version": SAVE_VERSION, "kind": world_kind, "seed": _seed, "edits": _data.all_deltas()}))
 	f.close()
 	return true
 
@@ -148,6 +148,7 @@ func load_world(path: String) -> bool:
 	var raw: Variant = p.data
 	if typeof(raw) != TYPE_DICTIONARY:
 		return false
+	world_kind = str((raw as Dictionary).get("kind", world_kind))
 	var edits: Variant = (raw as Dictionary).get("edits", {})
 	if typeof(edits) == TYPE_DICTIONARY:
 		_data.load_deltas(edits)
@@ -161,6 +162,7 @@ func build_welcome(peer_id: int) -> Dictionary:
 		roster.append({"eid": p["eid"], "name": p["name"], "pos": [pos.x, pos.y, pos.z]})
 	return {
 		"seed": _seed,
+		"kind": world_kind,
 		"spawn": [_spawn.x, _spawn.y, _spawn.z],
 		"your_eid": str(_peers.get(peer_id, {}).get("eid", "")),
 		"peers": roster,
@@ -170,6 +172,7 @@ func build_welcome(peer_id: int) -> Dictionary:
 # 客户端：套用 welcome —— 用服务器种子建世界并载入增量。world 由 Main 在 CLIENT 模式下注入。
 func apply_welcome(payload: Dictionary) -> void:
 	_seed = int(payload.get("seed", 1337))
+	world_kind = str(payload.get("kind", "infinite"))
 	var sp: Array = payload.get("spawn", [0, 0, 0])
 	if sp.size() == 3:
 		_spawn = Vector3(float(sp[0]), float(sp[1]), float(sp[2]))
@@ -251,6 +254,7 @@ const SNAPSHOT_HZ := 15.0
 var _snap_accum := 0.0
 var _self_sync_accum := 0.0
 var world_save_path := ""            # 服务器：非空则定期把权威世界增量存到此本地文件（世界重启不丢）
+var world_kind := "infinite"         # 权威世界类型；随 welcome 下发给客户端
 var _save_accum := 0.0
 const AUTOSAVE_SEC := 30.0
 const SAVE_VERSION := 1
