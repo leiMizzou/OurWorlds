@@ -38,6 +38,23 @@ func _initialize() -> void:
 	# 缺文件 / 坏路径不崩
 	check(not b.load_world("user://tests/__nope_missing__.json"), "缺文件 → load 返回 false（不崩）")
 
+	# kind 轮回：存盘时写入 kind，重启后 load_world 还原 world_kind
+	var kind_path := "user://tests/server_world_kind.json"
+	if FileAccess.file_exists(kind_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(kind_path))
+	var ka := NetworkManager.new()
+	ka.mode = NetworkManager.Mode.SERVER
+	ka.world_kind = "themed_island"
+	var dka := WorldData.new(77, "themed_island")
+	ka.set_authority_data(dka, 77, Vector3.ZERO)
+	check(ka.save_world(kind_path), "kind 轮回：存盘成功")
+	var kb := NetworkManager.new()
+	kb.mode = NetworkManager.Mode.SERVER
+	var dkb := WorldData.new(77)
+	kb.set_authority_data(dkb, 77, Vector3.ZERO)
+	check(kb.load_world(kind_path), "kind 轮回：载入成功")
+	check(kb.world_kind == "themed_island", "kind 轮回：world_kind 还原为 themed_island")
+
 	if failed == 0: print("✅ ALL SERVER WORLD SAVE TESTS PASSED")
 	else: printerr("❌ ", failed, " 个服务器存档测试失败")
 	quit(0 if failed == 0 else 1)

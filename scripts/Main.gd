@@ -392,7 +392,14 @@ func _make_remote_avatar() -> Node3D:
 
 func _start_dedicated_server() -> void:
 	# 纯权威服务器：只建 WorldData + NetworkManager，不建玩家/HUD/渲染。
-	var server_kind := OS.get_environment("VC_WORLD_KIND") if OS.has_environment("VC_WORLD_KIND") else "infinite"
+	var env_kind := OS.get_environment("VC_WORLD_KIND") if OS.has_environment("VC_WORLD_KIND") else "infinite"
+	var save_path := _server_save_path()
+	# 已有服务器存档 -> 以存档记录的 kind 为准（即使重启时漏设 VC_WORLD_KIND，生成器与广播也一致）
+	var server_kind := env_kind
+	if save_path != "" and FileAccess.file_exists(save_path):
+		var p := JSON.new()
+		if p.parse(FileAccess.get_file_as_string(save_path)) == OK and typeof(p.data) == TYPE_DICTIONARY:
+			server_kind = str((p.data as Dictionary).get("kind", env_kind))
 	var data := WorldData.new(_current_seed, server_kind)
 	net_manager = NetworkManager.new()
 	net_manager.name = "NetworkManager"
@@ -401,7 +408,7 @@ func _start_dedicated_server() -> void:
 	net_manager.chat_hub = ChatHub.new()
 	var spawn := Vector3(0.5, data.surface_y(0, 0) + 3, 0.5)
 	net_manager.set_authority_data(data, _current_seed, spawn)
-	net_manager.world_save_path = _server_save_path()        # 世界重启不丢：载入已有存档 + 定期自动存盘
+	net_manager.world_save_path = save_path        # 世界重启不丢：载入已有存档 + 定期自动存盘
 	if net_manager.load_world(net_manager.world_save_path):
 		print("已载入服务器世界存档：", net_manager.world_save_path)
 	add_child(net_manager)

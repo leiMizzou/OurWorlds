@@ -23,6 +23,11 @@ func _initialize() -> void:
 	var client := WorldData.new(int(welcome["seed"]), str(welcome["kind"]))
 	check(client.get_block(4000, 50, 4000) == data.get_block(4000, 50, 4000), "客户端按 kind 重生与服务器一致")
 
+	# apply_welcome（真实客户端路径）存下 kind
+	var nm_client := NetworkManager.new()
+	nm_client.apply_welcome(welcome)
+	check(nm_client.world_kind == "themed_island", "apply_welcome 存储 kind=themed_island")
+
 	if failed == 0: print("✅ ALL ISLAND MP TESTS PASSED")
 	else: printerr("❌ ", failed, " 个多人测试失败")
 	quit(0 if failed == 0 else 1)
