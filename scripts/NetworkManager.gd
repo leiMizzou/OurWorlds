@@ -9,6 +9,8 @@ const Chunk = preload("res://scripts/Chunk.gd")
 
 enum Mode { OFFLINE, SERVER, CLIENT, HOST }
 
+signal welcomed(payload: Dictionary)
+
 const DEFAULT_PORT := 8971
 const PLAYER_REACH := 8.0          # 服务器校验：编辑点离该玩家的最大水平+垂直距离（基础防作弊）
 const PLAYER_REACH_MARGIN := 1.0   # 手臂/视角补偿：允许编辑脚下/眼前紧邻一格
@@ -203,3 +205,149 @@ func _peers_name_for(eid: String) -> String:
 		if str(_peers[pid]["eid"]) == eid:
 			return str(_peers[pid]["name"])
 	return ""
+
+# ============ 实时层（Phase B：WebSocketMultiplayerPeer + 高层 RPC）============
+# 服务器恒为 peer 1。CLIENT 用 rpc_id(1, ...) 把编辑请求发给服务器；
+# 服务器校验后用 rpc(...) 把 apply_edit 广播给所有客户端。玩家快照由服务器 ~15Hz 广播。
+
+const SNAPSHOT_HZ := 15.0
+var _snap_accum := 0.0
+var _self_sync_accum := 0.0
+
+func is_server() -> bool:
+	return mode == Mode.SERVER or mode == Mode.HOST
+
+func is_client() -> bool:
+	return mode == Mode.CLIENT
+
+func start_server(port: int) -> int:
+	if mode == Mode.OFFLINE:
+		mode = Mode.SERVER          # 默认作为权威服务器；HOST 已先设好 HOST，不覆盖
+	var peer := WebSocketMultiplayerPeer.new()
+	var err := peer.create_server(port)
+	if err != OK:
+		push_warning("联机服务器监听失败 :%d (err=%d)" % [port, err])
+		return err
+	multiplayer.multiplayer_peer = peer
+	multiplayer.peer_connected.connect(_on_peer_connected)
+	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
+	print("OurWorlds 联机服务器监听 :%d（权威，无渲染）" % port)
+	return OK
+
+func start_client(url: String) -> int:
+	mode = Mode.CLIENT
+	var peer := WebSocketMultiplayerPeer.new()
+	var err := peer.create_client(url)
+	if err != OK:
+		push_warning("联机连接失败 %s (err=%d)" % [url, err])
+		return err
+	multiplayer.multiplayer_peer = peer
+	multiplayer.connected_to_server.connect(_on_connected_to_server)
+	multiplayer.server_disconnected.connect(_on_server_disconnected)
+	print("OurWorlds 客户端连接中 %s ..." % url)
+	return OK
+
+func start_host(port: int) -> int:
+	# HOST = 服务器 + 本地玩家。把房主自己也登记成一个 peer（id=1），这样快照/名册统一处理。
+	mode = Mode.HOST          # 必须在 start_server 之前设，使其保留 HOST（start_server 只在 OFFLINE 时设 SERVER）
+	var r := start_server(port)
+	if r != OK:
+		return r
+	var eid := register_peer(1, "房主")
+	_self_eid = eid
+	if player != null:
+		set_peer_transform(1, player.global_position, player.rotation.y)
+	return OK
+
+# ---- 服务器侧信号 ----
+func _on_peer_connected(_id: int) -> void:
+	# peer 连上后等它先 rpc 报名（_rpc_hello）；正式注册在 _rpc_hello。
+	pass
+
+func _on_peer_disconnected(id: int) -> void:
+	if _peers.has(id):
+		drop_peer(id)
+
+# ---- 客户端侧信号 ----
+func _on_connected_to_server() -> void:
+	# 连上后向服务器报名（带本机玩家名）；服务器回 _rpc_welcome。
+	_rpc_hello.rpc_id(1, _local_player_name())
+	print("已连上服务器，等待入场 ...")
+
+func _on_server_disconnected() -> void:
+	print("与服务器断开。")
+
+func _local_player_name() -> String:
+	return "玩家"   # M1 先用固定名；连接界面任务可让玩家填名
+
+# ---- RPC：客户端->服务器 ----
+@rpc("any_peer", "reliable")
+func _rpc_hello(display_name: String) -> void:
+	if not is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if _peers.has(sender):
+		return                    # 重复 hello：已注册则忽略，避免 eid 泄漏 / 重复 welcome
+	register_peer(sender, display_name)
+	_rpc_welcome.rpc_id(sender, build_welcome(sender))
+
+@rpc("any_peer", "reliable")
+func _rpc_request_edit(wx: int, wy: int, wz: int, id: int) -> void:
+	if not is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	var res := authorize_edit(sender, wx, wy, wz, id)
+	if not bool(res.get("ok", false)):
+		return
+	_rpc_apply_edit.rpc(wx, wy, wz, id)
+
+@rpc("any_peer", "reliable")
+func _rpc_update_self(px: float, py: float, pz: float, yaw: float) -> void:
+	if not is_server():
+		return
+	set_peer_transform(multiplayer.get_remote_sender_id(), Vector3(px, py, pz), yaw)
+
+# ---- RPC：服务器->客户端 ----
+@rpc("authority", "reliable")
+func _rpc_welcome(payload: Dictionary) -> void:
+	_self_eid = str(payload.get("your_eid", ""))
+	apply_welcome(payload)
+	welcomed.emit(payload)        # Main 在 CLIENT 模式下接它来建世界/玩家
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_apply_edit(wx: int, wy: int, wz: int, id: int) -> void:
+	if world != null and world.has_method("apply_remote_edit"):
+		world.apply_remote_edit(wx, wy, wz, id)
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_players(snapshot: Array) -> void:
+	# call_local：HOST 既是服务器又在本地游玩，需对自己也套用快照才能看见别人的小人
+	#（apply_player_snapshot 会跳过 _self_eid，故不会给房主自己造分身）；
+	# 纯 SERVER 无 avatar_factory，_spawn_avatar 返回 null，相当于空操作。
+	apply_player_snapshot(snapshot)
+
+# ---- 编辑出入口（World.net 调用）----
+func submit_edit(wx: int, wy: int, wz: int, id: int) -> void:
+	_rpc_request_edit.rpc_id(1, wx, wy, wz, id)     # 客户端：请求发给服务器
+
+func broadcast_edit(wx: int, wy: int, wz: int, id: int) -> void:
+	_rpc_apply_edit.rpc(wx, wy, wz, id)             # HOST：本地已应用，广播给客户端
+
+# ---- 帧循环：服务器广播玩家快照；客户端上报自身位置（~15Hz）----
+func _process(delta: float) -> void:
+	if multiplayer.multiplayer_peer == null:
+		return
+	if is_server():
+		if mode == Mode.HOST and player != null and _peers.has(1):
+			set_peer_transform(1, player.global_position, player.rotation.y)
+		_snap_accum += delta
+		if _snap_accum >= 1.0 / SNAPSHOT_HZ:
+			_snap_accum = 0.0
+			if not _peers.is_empty():
+				_rpc_sync_players.rpc(build_player_snapshot())
+	elif is_client():
+		_self_sync_accum += delta
+		if _self_sync_accum >= 1.0 / SNAPSHOT_HZ:
+			_self_sync_accum = 0.0
+			if player != null:
+				_rpc_update_self.rpc_id(1, player.global_position.x, player.global_position.y, player.global_position.z, player.rotation.y)
