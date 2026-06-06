@@ -36,5 +36,9 @@
 ## 现状（2026-06-06）
 - ✅ M0（WorldData 数据核心）、M0.5（Web 烟测 + 字体）已完成并入 main。
 - ✅ **M1 完成**（分支 `m1-local-coop`，10 个任务全绿，52/52 自检）：headless 权威服务器 + 客户端，编辑/走动实时同步、增量持久、晚加入可见已有改动；端到端冒烟 `packaging/coop_smoke.sh` 通过。**仅剩"两个窗口里互看走动"的人工肉眼验收**（`packaging/run_coop_demo.sh`），我无头看不到画面。
-- 🔄 **M2 进行中**：**网页客户端联机已实测通过**——浏览器里 Godot WASM 启动+渲染（标题/3D 地形/中文字体都正常），经 WebSocket 连上权威服务器并入场（控制台确认：连接中→已连上服务器→脚下区域就绪 2.7s；多线程 crossOriginIsolated via COOP/COEP）。`?connect=ws://…` URL 参数自动连服已落地（`Main._connect_url`）。已知小瑕：网页端有 Emscripten "blocking on main thread" 警告（非致命，连接成功；M5 性能再优化）。待办：网页"加入"菜单走 ?connect 跳转、AI agent 作为联机玩家、坐标瞬移/分享建造。
-- ⬜ M3（Cloudflare Tunnel）、M4（账号 + 社交 OAuth）、M5、M6、Mac App：依次推进；外部账号步骤（CF/OAuth/Apple）到点交给你。
+- ✅ **M2 完成**：网页客户端联机已实测（浏览器 Godot WASM 经 WebSocket 连上权威服务器并入场，控制台确认；多线程 crossOriginIsolated via COOP/COEP）；`?connect=ws://…` URL 参数自动连服（`Main._connect_url`）；**M2b AI agent 作为联机玩家**已验证（`packaging/agent_net_smoke.sh`：agent 走到远处建造，服务器按其真实位置授权）。小瑕：网页 Emscripten "blocking on main thread" 警告（非致命，M5 再优化）。
+- ✅ **M2.5 核心完成**：瞬移参观（在线列表「前往」按钮 + `teleport_to_peer`）+ Blueprint 建造捕获/序列化/粘贴（`scripts/Blueprint.gd`，54/54 自检）。小尾巴：游戏内"框选区域→存/贴蓝图"入口。
+- ✅ **Mac App 导出已验证**：`build/macos/OurWorlds.zip` 含完整 `.app`（M1/M2 改动后仍可导出运行）。签名/公证待你的 Developer ID + Apple 凭证（`packaging/build_macos.sh` 已就绪）。
+- ⬜ **三大头条功能就差你的外部步骤**（我都铺好了，只有你能做）：M3 Cloudflare 公网（`deploy/README.md`）、M4 社交登录（`deploy/accounts/README.md` 注册 OAuth 应用）、Mac 公证（Apple 凭证）。
+- ⬜ 仍可自主推进（但不解锁头条）：M4 邮箱/密码登录、蓝图捕获/粘贴入口、M5 大厅/兴趣管理、M6 加固。
+- 📌 `main` 比 origin 领先 ~21 提交（未推送，等你发话）。M1 双窗口肉眼验收：`bash packaging/run_coop_demo.sh`。
