@@ -184,7 +184,7 @@ func _build_luts() -> void:
 		mat_bucket_lut[eid] = 1 if (eid == LANTERN or eid == MOONSTONE_LAMP or eid == BLUE_CRYSTAL or eid == SUNSTONE or eid == NEON_CYAN or eid == NEON_MAGENTA or eid == NEON_LIME) else 0
 
 func hotbar_blocks() -> Array:
-	return [GRASS, DIRT, STONE, BRICK, MOSSY_STONE, BASALT, MARBLE, LOG, PLANKS, GLASS, LANTERN, MOONSTONE_LAMP, SUNSTONE, POLISHED_IRON, COPPER_PANEL, NEON_CYAN, WILDFLOWER]
+	return [GRASS, DIRT, STONE, BRICK, MOSSY_STONE, BASALT, MARBLE, LOG, PLANKS, GLASS, LANTERN, MOONSTONE_LAMP, SUNSTONE, POLISHED_IRON, NEON_CYAN, WILDFLOWER]
 
 func creative_blocks() -> Array:
 	# 注意：矿石(COPPER_ORE)排在精炼金属(COPPER_PANEL)之前——材料库按本列表顺序取"搜索首个匹配"，

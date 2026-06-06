@@ -4,6 +4,15 @@ extends RefCounted
 # 纯函数：仅依赖 (seed, wx, wz)；generate 不触碰任何全局可变状态，可在后台线程安全调用。
 const Chunk = preload("res://scripts/Chunk.gd")
 const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
+const Pyramid = preload("res://scripts/structures/Pyramid.gd")
+const ObservatoryDome = preload("res://scripts/structures/ObservatoryDome.gd")
+const CyberTowers = preload("res://scripts/structures/CyberTowers.gd")
+const WindmillFarm = preload("res://scripts/structures/WindmillFarm.gd")
+const LighthouseDock = preload("res://scripts/structures/LighthouseDock.gd")
+const SnowCabin = preload("res://scripts/structures/SnowCabin.gd")
+const Village = preload("res://scripts/structures/Village.gd")
+const PlazaMonument = preload("res://scripts/structures/PlazaMonument.gd")
+const RailBridgeNet = preload("res://scripts/structures/RailBridgeNet.gd")
 
 const ISLAND_SIZE := 512           # 岛边长（格）
 const HALF := 256                  # = ISLAND_SIZE / 2
@@ -50,6 +59,18 @@ const THEME_SURFACE := {
 	IslandTheme.BAY:         {"top": BlockLibrary.SAND,        "sub": BlockLibrary.SAND,  "water": true},
 }
 
+# Sector -> structure builder (static stamp function)
+const THEME_BUILDER := {
+	IslandTheme.SNOW: SnowCabin,
+	IslandTheme.DESERT: Pyramid,
+	IslandTheme.TROPICAL: LighthouseDock,
+	IslandTheme.VILLAGE: Village,
+	IslandTheme.PLAZA: PlazaMonument,
+	IslandTheme.CYBER: CyberTowers,
+	IslandTheme.OBSERVATORY: ObservatoryDome,
+	IslandTheme.FARM: WindmillFarm,
+}
+
 const THEME_LABEL := {
 	IslandTheme.SNOW: "雪山", IslandTheme.DESERT: "沙漠", IslandTheme.TROPICAL: "热带海岸",
 	IslandTheme.VILLAGE: "村庄", IslandTheme.PLAZA: "中央广场", IslandTheme.CYBER: "霓虹城",
@@ -85,23 +106,41 @@ func surface_height(wx: int, wz: int) -> int:
 		h -= (EDGE - edge_d) * 2                     # 边缘跌落成崖
 	return maxi(h, FLOOR_Y + 1)
 
+# 扇区中心世界坐标（确定性，按 cell 0..8 算出）
+func sector_anchor(cell: int) -> Vector3i:
+	var col := cell % SECTORS
+	var row := cell / SECTORS
+	var span := ISLAND_SIZE / SECTORS
+	var cx := -HALF + span / 2 + col * span
+	var cz := -HALF + span / 2 + row * span
+	var sy := surface_height(cx, cz)
+	return Vector3i(cx, sy, cz)
+
 func generate(chunk: Chunk) -> void:
+	# 1) 地形
 	for lx in range(Chunk.SX):
 		for lz in range(Chunk.SZ):
 			var wx := chunk.cx * Chunk.SX + lx
 			var wz := chunk.cz * Chunk.SZ + lz
 			if not inside(wx, wz):
 				continue
-			var theme := theme_at(wx, wz)
+			var theme: int = theme_at(wx, wz)
 			var surf: Dictionary = THEME_SURFACE[theme]
 			var top := surface_height(wx, wz)
 			for y in range(FLOOR_Y, top):
 				chunk.set_block(lx, y, lz, surf["sub"])
 			chunk.set_block(lx, top, lz, surf["top"])
-			# 含水扇区：地表以上注水到 WATER_Y
 			if surf["water"]:
 				for y in range(top + 1, WATER_Y + 1):
 					chunk.set_block(lx, y, lz, BlockLibrary.WATER)
+	# 2) 标志建筑
+	for cell in range(SECTORS * SECTORS):
+		var cell_theme: int = CELL_THEME[cell]
+		if THEME_BUILDER.has(cell_theme):
+			var anchor := sector_anchor(cell)
+			THEME_BUILDER[cell_theme].stamp(chunk, null, anchor)
+	# 3) 铁轨连接网
+	RailBridgeNet.stamp(chunk, null, Vector3i(0, BASE_Y, 0))
 
 func region_label(wx: int, wz: int) -> String:
 	if not inside(wx, wz):
