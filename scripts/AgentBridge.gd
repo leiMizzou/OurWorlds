@@ -55,6 +55,7 @@ const BLOCK_ALIASES := {
 	22: "copper_ore", 23: "red_mushroom", 24: "reeds", 25: "blue_crystal", 26: "clay",
 	27: "moonstone_lamp", 28: "polished_iron", 29: "copper_panel", 30: "steel_block",
 	31: "gold_trim", 32: "red_sand", 33: "terracotta", 34: "sunstone",
+	35: "neon_cyan", 36: "neon_magenta", 37: "neon_lime", 38: "rail",
 }
 
 # 中文地貌标签 -> 英文别名（契约 §6）

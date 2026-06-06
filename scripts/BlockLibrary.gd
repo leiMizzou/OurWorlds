@@ -39,6 +39,11 @@ const GOLD_TRIM := 31       # 鎏金饰板：奢华金面 + 横向装饰刻线
 const RED_SAND := 32        # 红沙：mesa/沙漠暖红地貌
 const TERRACOTTA := 33      # 赤陶/陶土：暖砖红，细腻团块
 const SUNSTONE := 34        # 暖光石：暖白自发光建材（可建造光源）
+# ---- 赛博/科技方块（SP2：霓虹发光 + 铁轨）----
+const NEON_CYAN := 35       # 霓虹青：暗底+亮青网格线，自发光
+const NEON_MAGENTA := 36    # 霓虹品红：暗底+品红网格线，自发光
+const NEON_LIME := 37       # 霓虹绿：暗底+黄绿网格线，自发光
+const RAIL := 38            # 铁轨：深色金属底+平行亮轨+枕木
 
 # ---- 图集贴图格子编号 ----
 const T_GRASS_TOP := 0
@@ -77,10 +82,14 @@ const T_GOLD_TRIM := 32
 const T_RED_SAND := 33
 const T_TERRACOTTA := 34
 const T_SUNSTONE := 35
-const TILE_COUNT := 36
+const T_NEON_CYAN := 36
+const T_NEON_MAGENTA := 37
+const T_NEON_LIME := 38
+const T_RAIL := 39
+const TILE_COUNT := 40
 
-const ATLAS_COLS := 6
-const ATLAS_ROWS := 6
+const ATLAS_COLS := 8
+const ATLAS_ROWS := 5
 const TILE := 16
 
 var _defs := {}
@@ -144,10 +153,15 @@ func _build_defs() -> void:
 	_defs[TERRACOTTA]    = {"name": "赤陶",   "top": T_TERRACOTTA, "side": T_TERRACOTTA, "bottom": T_TERRACOTTA, "solid": true, "transparent": false}
 	# 可建造光源：自发光(进桶1)，与 MOONSTONE_LAMP/LANTERN 同样 transparent，发光像素 alpha 略低于 1
 	_defs[SUNSTONE]      = {"name": "暖光石", "top": T_SUNSTONE, "side": T_SUNSTONE, "bottom": T_SUNSTONE, "solid": true, "transparent": true}
+	# 赛博/科技方块（SP2）——霓虹自发光 + 铁轨
+	_defs[NEON_CYAN]     = {"name": "霓虹青",   "top": T_NEON_CYAN, "side": T_NEON_CYAN, "bottom": T_NEON_CYAN, "solid": true, "transparent": false}
+	_defs[NEON_MAGENTA]  = {"name": "霓虹品红", "top": T_NEON_MAGENTA, "side": T_NEON_MAGENTA, "bottom": T_NEON_MAGENTA, "solid": true, "transparent": false}
+	_defs[NEON_LIME]     = {"name": "霓虹绿",   "top": T_NEON_LIME, "side": T_NEON_LIME, "bottom": T_NEON_LIME, "solid": true, "transparent": false}
+	_defs[RAIL]          = {"name": "铁轨",     "top": T_RAIL, "side": T_RAIL, "bottom": T_RAIL, "solid": true, "transparent": false}
 
 # 把定义压成扁平数值表，供后台线程造网格时无锁读取
 func _build_luts() -> void:
-	var n := SUNSTONE + 1
+	var n := RAIL + 1
 	solid_lut = PackedByteArray(); solid_lut.resize(n)
 	opaque_lut = PackedByteArray(); opaque_lut.resize(n)
 	transp_lut = PackedByteArray(); transp_lut.resize(n)
@@ -167,10 +181,10 @@ func _build_luts() -> void:
 			tile_bot_lut[id] = dd["bottom"]
 	mat_bucket_lut = PackedByteArray(); mat_bucket_lut.resize(n)
 	for eid in range(n):
-		mat_bucket_lut[eid] = 1 if (eid == LANTERN or eid == MOONSTONE_LAMP or eid == BLUE_CRYSTAL or eid == SUNSTONE) else 0
+		mat_bucket_lut[eid] = 1 if (eid == LANTERN or eid == MOONSTONE_LAMP or eid == BLUE_CRYSTAL or eid == SUNSTONE or eid == NEON_CYAN or eid == NEON_MAGENTA or eid == NEON_LIME) else 0
 
 func hotbar_blocks() -> Array:
-	return [GRASS, DIRT, STONE, BRICK, MOSSY_STONE, BASALT, MARBLE, LOG, PLANKS, GLASS, LANTERN, MOONSTONE_LAMP, SUNSTONE, POLISHED_IRON, COPPER_PANEL, WILDFLOWER]
+	return [GRASS, DIRT, STONE, BRICK, MOSSY_STONE, BASALT, MARBLE, LOG, PLANKS, GLASS, LANTERN, MOONSTONE_LAMP, SUNSTONE, POLISHED_IRON, COPPER_PANEL, NEON_CYAN, WILDFLOWER]
 
 func creative_blocks() -> Array:
 	# 注意：矿石(COPPER_ORE)排在精炼金属(COPPER_PANEL)之前——材料库按本列表顺序取"搜索首个匹配"，
@@ -180,7 +194,9 @@ func creative_blocks() -> Array:
 		BASALT, MARBLE, SAND, SNOW, CLAY, RED_SAND, TERRACOTTA, LOG, PLANKS,
 		COAL_ORE, IRON_ORE, COPPER_ORE,
 		POLISHED_IRON, COPPER_PANEL, STEEL_BLOCK, GOLD_TRIM,
-		GLASS, LEAVES, PINE_LEAVES, LANTERN, MOONSTONE_LAMP, SUNSTONE, WILDFLOWER, TALL_GRASS, RED_MUSHROOM, REEDS, BLUE_CRYSTAL,
+		GLASS, LEAVES, PINE_LEAVES, LANTERN, MOONSTONE_LAMP, SUNSTONE,
+		NEON_CYAN, NEON_MAGENTA, NEON_LIME, RAIL,
+		WILDFLOWER, TALL_GRASS, RED_MUSHROOM, REEDS, BLUE_CRYSTAL,
 		WATER,
 	]
 
@@ -191,6 +207,7 @@ func creative_categories() -> Array:
 		{"id": "building", "name": "建筑", "blocks": [BRICK, MOSSY_STONE, BASALT, MARBLE, CLAY, TERRACOTTA, POLISHED_IRON, COPPER_PANEL, STEEL_BLOCK, GOLD_TRIM, LOG, PLANKS, GLASS, SUNSTONE, MOONSTONE_LAMP]},
 		{"id": "nature", "name": "自然", "blocks": [LEAVES, PINE_LEAVES, WILDFLOWER, TALL_GRASS, RED_MUSHROOM, REEDS]},
 		{"id": "decor", "name": "装饰", "blocks": [LANTERN, MOONSTONE_LAMP, SUNSTONE, GOLD_TRIM, GLASS, WILDFLOWER, TALL_GRASS, RED_MUSHROOM, REEDS, BLUE_CRYSTAL]},
+		{"id": "tech", "name": "科技", "blocks": [NEON_CYAN, NEON_MAGENTA, NEON_LIME, RAIL, STEEL_BLOCK, GLASS, POLISHED_IRON]},
 		{"id": "ores", "name": "矿物", "blocks": [COAL_ORE, IRON_ORE, COPPER_ORE, BLUE_CRYSTAL, STONE]},
 	]
 
@@ -420,6 +437,10 @@ func _tile_color(tile: int, px: int, py: int) -> Color:
 		T_RED_SAND: return _t_red_sand(px, py)
 		T_TERRACOTTA: return _t_terracotta(px, py)
 		T_SUNSTONE: return _t_sunstone(px, py)
+		T_NEON_CYAN: return _t_neon(px, py, Color(0.0, 0.95, 0.95))
+		T_NEON_MAGENTA: return _t_neon(px, py, Color(0.95, 0.15, 0.85))
+		T_NEON_LIME: return _t_neon(px, py, Color(0.55, 1.0, 0.10))
+		T_RAIL: return _t_rail(px, py)
 	return Color(1, 0, 1, 1)
 
 static func _hash01(x: int, y: int, salt: int) -> float:
@@ -1040,3 +1061,54 @@ func _t_sunstone(px: int, py: int) -> Color:
 	col = _grain(col, px, py, 222, 0.7, 0.05)
 	col.a = 0.97
 	return col
+
+# ---- 赛博/科技方块（SP2）——霓虹自发光 + 铁轨 ----
+
+func _t_neon(px: int, py: int, glow: Color) -> Color:
+	# 通用霓虹画师：深灰/近黑底板 + 亮色网格线（十字 + 外框）。
+	# 底板进 emissive 时发光很弱（暗底几乎不亮），网格线亮色进 emissive 后真正泛光 → 赛博味。
+	var dark := Color(0.06, 0.06, 0.08)
+	# 外框（最外一圈）：纯亮色，最强发光
+	if px == 0 or px == 15 or py == 0 or py == 15:
+		return glow
+	# 内框描边（次亮）
+	if px == 1 or px == 14 or py == 1 or py == 14:
+		return _mixc(glow, dark, 0.35)
+	# 中央十字网格线（px==7/8 或 py==7/8）：亮色
+	if px == 7 or px == 8 or py == 7 or py == 8:
+		# 交叉点最亮
+		if (px == 7 or px == 8) and (py == 7 or py == 8):
+			return _shade(glow, 0.08)
+		return _mixc(glow, dark, 0.25)
+	# 暗底板：极淡网格暗线（每4格一道微弱线），增加科技感
+	var sub_grid := (px % 4 == 0) or (py % 4 == 0)
+	if sub_grid:
+		return _shade(dark, 0.04)
+	# 纯暗底 + 极微噪点
+	return _grain(dark, px, py, 230, 0.5, 0.02)
+
+func _t_rail(px: int, py: int) -> Color:
+	# 铁轨：深灰金属底板 + 两条平行亮轨（px=4,5 和 px=10,11）+ 横向枕木（每4行）。
+	var base := Color(0.22, 0.22, 0.24)              # 深灰底（砾石路基）
+	base = _grain(base, px, py, 240, 0.4, 0.08)      # 砾石颗粒感
+	# 枕木：每4行一根，宽2..13（留边缘为路基）
+	var is_tie := (py % 4 <= 1) and px >= 2 and px <= 13
+	if is_tie:
+		var tie_col := Color(0.36, 0.26, 0.16)       # 暗棕木枕
+		tie_col = _grain(tie_col, px, py, 241, 0.5, 0.06)
+		# 枕木上沿亮、下沿暗（浮雕）
+		if py % 4 == 0: tie_col = _shade(tie_col, 0.04)
+		else: tie_col = _shade(tie_col, -0.04)
+		base = tie_col
+	# 钢轨：两条亮银轨道（高光金属）
+	var is_rail := (px == 4 or px == 5 or px == 10 or px == 11)
+	if is_rail:
+		var rail_col := Color(0.62, 0.65, 0.70)      # 冷亮钢轨
+		# 轨道内侧（px=5,10）略暗 → 立体感
+		if px == 5 or px == 10:
+			rail_col = _shade(rail_col, -0.08)
+		# 对角各向异性高光（模拟抛光钢轨反光）
+		var diag := absf(float(px - py)) / 15.0
+		rail_col = _shade(rail_col, (0.3 - diag) * 0.3)
+		return _grain(rail_col, px, py, 242, 0.6, 0.03)
+	return base
