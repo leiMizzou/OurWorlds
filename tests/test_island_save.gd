@@ -2,6 +2,7 @@ extends SceneTree
 # World 携带 kind 并写入存档；themed_island 世界数据用 IslandGenerator。
 const World = preload("res://scripts/World.gd")
 const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
+const WorldCatalog = preload("res://scripts/WorldCatalog.gd")
 
 var failed := 0
 func check(c: bool, m: String) -> void:
@@ -25,6 +26,14 @@ func _initialize() -> void:
 
 	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
 	check(typeof(data) == TYPE_DICTIONARY and str((data as Dictionary).get("kind", "")) == "themed_island", "存档写入 kind=themed_island")
+
+	var meta := WorldCatalog._read_world_meta(path)
+	check(not meta.is_empty() and str(meta.get("kind", "")) == "themed_island", "WorldCatalog 读出 kind=themed_island")
+	# 旧存档（无 kind 字段）默认 infinite
+	var legacy := "user://tests/legacy.json"
+	var lf := FileAccess.open(legacy, FileAccess.WRITE)
+	lf.store_string(JSON.stringify({"seed": 5, "edits": {}})); lf.close()
+	check(str(WorldCatalog._read_world_meta(legacy).get("kind", "")) == "infinite", "旧存档默认 kind=infinite")
 
 	if failed == 0: print("✅ ALL ISLAND SAVE TESTS PASSED")
 	else: printerr("❌ ", failed, " 个存档测试失败")

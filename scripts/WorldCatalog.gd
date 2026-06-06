@@ -151,6 +151,7 @@ static func _read_world_meta(path: String) -> Dictionary:
 	var edits := edits_raw as Dictionary if typeof(edits_raw) == TYPE_DICTIONARY else {}
 	return {
 		"seed": seed,
+		"kind": String(data.get("kind", "infinite")),
 		"name": world_name(seed),
 		"biome_label": world_biome_label(seed),
 		"cover_path": String(data.get("cover_path", "")),
