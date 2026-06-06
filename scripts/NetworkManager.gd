@@ -128,6 +128,31 @@ func _accept_rate(peer_id: int, now: float) -> bool:
 
 # 服务器：给一个刚连进来的 peer 打包入场信息（种子+出生点+本端 eid+在线名册+全部增量）。
 # M1 世界小，直接发全部 delta；兴趣管理（按区块按需发）是 M5。
+# ---- 服务器世界存档（本地文件，JSON 增量；世界重启不丢。按种子另存）----
+func save_world(path: String) -> bool:
+	if _data == null or path == "":
+		return false
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		return false
+	f.store_string(JSON.stringify({"version": SAVE_VERSION, "seed": _seed, "edits": _data.all_deltas()}))
+	f.close()
+	return true
+
+func load_world(path: String) -> bool:
+	if _data == null or path == "" or not FileAccess.file_exists(path):
+		return false
+	var p := JSON.new()
+	if p.parse(FileAccess.get_file_as_string(path)) != OK:
+		return false
+	var raw: Variant = p.data
+	if typeof(raw) != TYPE_DICTIONARY:
+		return false
+	var edits: Variant = (raw as Dictionary).get("edits", {})
+	if typeof(edits) == TYPE_DICTIONARY:
+		_data.load_deltas(edits)
+	return true
+
 func build_welcome(peer_id: int) -> Dictionary:
 	var roster := []
 	for pid in _peers:
@@ -225,6 +250,10 @@ func _peers_name_for(eid: String) -> String:
 const SNAPSHOT_HZ := 15.0
 var _snap_accum := 0.0
 var _self_sync_accum := 0.0
+var world_save_path := ""            # 服务器：非空则定期把权威世界增量存到此本地文件（世界重启不丢）
+var _save_accum := 0.0
+const AUTOSAVE_SEC := 30.0
+const SAVE_VERSION := 1
 
 func is_server() -> bool:
 	return mode == Mode.SERVER or mode == Mode.HOST
@@ -357,6 +386,11 @@ func _process(delta: float) -> void:
 			_snap_accum = 0.0
 			if not _peers.is_empty():
 				_rpc_sync_players.rpc(build_player_snapshot())
+		if world_save_path != "":          # 定期自动存盘（按住建造，重启不丢）
+			_save_accum += delta
+			if _save_accum >= AUTOSAVE_SEC:
+				_save_accum = 0.0
+				save_world(world_save_path)
 	elif is_client():
 		_self_sync_accum += delta
 		if _self_sync_accum >= 1.0 / SNAPSHOT_HZ:
@@ -364,3 +398,8 @@ func _process(delta: float) -> void:
 			var rn: Node3D = report_node if report_node != null else player
 			if rn != null:
 				_rpc_update_self.rpc_id(1, rn.global_position.x, rn.global_position.y, rn.global_position.z, rn.rotation.y)
+
+func _exit_tree() -> void:
+	# 服务器优雅退出时存一次盘（定期自动存盘兜底强杀丢的 ≤30s）
+	if is_server() and world_save_path != "":
+		save_world(world_save_path)

@@ -397,8 +397,19 @@ func _start_dedicated_server() -> void:
 	net_manager.chat_hub = ChatHub.new()
 	var spawn := Vector3(0.5, data.surface_y(0, 0) + 3, 0.5)
 	net_manager.set_authority_data(data, _current_seed, spawn)
+	net_manager.world_save_path = _server_save_path()        # 世界重启不丢：载入已有存档 + 定期自动存盘
+	if net_manager.load_world(net_manager.world_save_path):
+		print("已载入服务器世界存档：", net_manager.world_save_path)
 	add_child(net_manager)
 	net_manager.start_server(_net_port())
+
+func _server_save_path() -> String:
+	if OS.has_environment("VC_NO_SAVE"):
+		return ""
+	if OS.has_environment("OW_WORLD_SAVE"):
+		return OS.get_environment("OW_WORLD_SAVE")
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://server_worlds"))
+	return "user://server_worlds/%d.json" % _current_seed
 
 func _start_host_after_enter() -> void:
 	net_manager = NetworkManager.new()
