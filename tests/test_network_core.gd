@@ -78,6 +78,46 @@ func _initialize() -> void:
 	cdata.load_deltas(welcome["deltas"])
 	check(int(cdata.get_block(4, sdata.surface_y(4, 4) + 1, 4)) == 3, "客户端套用 welcome 后看到已有编辑")
 
+	# ---- 玩家快照：服务器打包所有人的位置，客户端套用后生成/更新/移除 RemoteAvatar ----
+	var snap_srv := NetworkManager.new()
+	snap_srv.mode = NetworkManager.Mode.SERVER
+	snap_srv.set_authority_data(WorldData.new(1), 1, Vector3.ZERO)
+	snap_srv.register_peer(31, "Dan")
+	snap_srv.register_peer(32, "Eve")
+	snap_srv.set_peer_transform(31, Vector3(10, 40, 10), 1.5)
+	snap_srv.set_peer_transform(32, Vector3(20, 41, 22), 0.0)
+	var snap: Array = snap_srv.build_player_snapshot()
+	check(snap.size() == 2, "快照含 2 个玩家")
+
+	# 客户端套用：用桩工厂生成假 avatar，验证 upsert/remove
+	var client := NetworkManager.new()
+	client.mode = NetworkManager.Mode.CLIENT
+	client.avatar_factory = func() -> Node3D:
+		var n := Node3D.new()
+		return n
+	client._self_eid = "me"     # 不给自己造分身
+	# 第一次：生成两个 avatar
+	client.apply_player_snapshot(snap)
+	check(client.avatar_count() == 2, "首次快照生成 2 个 RemoteAvatar")
+	# 再来一次（同样的人）：不应重复生成
+	client.apply_player_snapshot(snap)
+	check(client.avatar_count() == 2, "重复快照不重复生成")
+	# 其中一人离开：快照里去掉 -> 移除其 avatar
+	var snap2: Array = [snap[0]]
+	client.apply_player_snapshot(snap2)
+	check(client.avatar_count() == 1, "玩家离开后其 avatar 被移除")
+	# 自己的 eid 不会生成分身
+	var with_self: Array = snap2.duplicate()
+	with_self.append({"eid": "me", "pos": [0, 40, 0], "yaw": 0.0})
+	client.apply_player_snapshot(with_self)
+	check(client.avatar_count() == 1, "不给本端自己生成 avatar")
+
+	# 无 avatar 工厂（未注入）-> 不生成分身，也不崩
+	var no_factory := NetworkManager.new()
+	no_factory.mode = NetworkManager.Mode.CLIENT
+	no_factory.apply_player_snapshot(snap)
+	check(no_factory.avatar_count() == 0, "无工厂时不生成 avatar")
+
 	if failed == 0: print("✅ ALL NETWORK CORE TESTS PASSED")
 	else: printerr("❌ ", failed, " 个网络核心测试失败")
 	quit(0 if failed == 0 else 1)

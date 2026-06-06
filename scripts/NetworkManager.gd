@@ -26,6 +26,8 @@ var _seed: int = 1337
 var _spawn: Vector3 = Vector3.ZERO
 var _peers := {}                   # peer_id:int -> {eid, name, pos:Vector3, yaw:float, edits:Array[float]}
 var _eid_counter := 0
+var _self_eid := ""                # 本端自己的 eid（CLIENT/HOST）；快照里跳过它
+var _avatars := {}                 # eid -> RemoteAvatar 节点（CLIENT）
 
 func set_authority_data(data: WorldData, world_seed: int, spawn: Vector3) -> void:
 	_data = data
@@ -134,3 +136,70 @@ func apply_welcome(payload: Dictionary) -> void:
 		_spawn = Vector3(float(sp[0]), float(sp[1]), float(sp[2]))
 	if world != null and world.has_method("load_deltas_from_net"):
 		world.load_deltas_from_net(payload.get("deltas", {}))
+
+# 服务器：打包所有联机玩家的位置/朝向（HOST 下也含房主自己——房主也是一个 peer）。
+func build_player_snapshot() -> Array:
+	var out := []
+	for pid in _peers:
+		var p: Dictionary = _peers[pid]
+		var pos: Vector3 = p["pos"]
+		out.append({"eid": p["eid"], "pos": [pos.x, pos.y, pos.z], "yaw": p["yaw"]})
+	return out
+
+# 客户端：按快照增量更新 avatar —— 缺的生成、有的更新目标、走了的移除。跳过本端自己。
+func apply_player_snapshot(snapshot: Array) -> void:
+	var seen := {}
+	for raw in snapshot:
+		var e: Dictionary = raw
+		var eid := str(e.get("eid", ""))
+		if eid == "" or eid == _self_eid:
+			continue
+		seen[eid] = true
+		var ap: Array = e.get("pos", [0, 0, 0])
+		var pos := Vector3(float(ap[0]), float(ap[1]), float(ap[2]))
+		var yaw := float(e.get("yaw", 0.0))
+		if not _avatars.has(eid):
+			var node: Node3D = _spawn_avatar(eid)
+			if node == null:
+				continue
+			_avatars[eid] = node
+		var av: Node3D = _avatars[eid]
+		if av.has_method("set_net_target"):
+			av.set_net_target(pos, yaw)
+		else:
+			av.position = pos
+	# 移除快照里不再出现的
+	for eid in _avatars.keys():
+		if not seen.has(eid):
+			var node: Node3D = _avatars[eid]
+			if is_instance_valid(node):
+				node.queue_free()
+			_avatars.erase(eid)
+
+func avatar_count() -> int:
+	return _avatars.size()
+
+# 生成一个 RemoteAvatar：优先用注入的工厂（测试桩 / Main 真身），否则返回 null。
+func _spawn_avatar(eid: String) -> Node3D:
+	if not avatar_factory.is_valid():
+		return null
+	var node: Node3D = avatar_factory.call()
+	if node == null:
+		return null
+	if node.has_method("set_label"):
+		var nm := eid
+		var found := _peers_name_for(eid)
+		if found != "":
+			nm = found
+		node.set_label(nm)
+	if world != null:
+		world.add_child(node)
+	else:
+		add_child(node)
+	return node
+
+func _peers_name_for(eid: String) -> String:
+	for pid in _peers:
+		if str(_peers[pid]["eid"]) == eid:
+			return str(_peers[pid]["name"])
+	return ""
