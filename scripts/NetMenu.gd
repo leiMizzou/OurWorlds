@@ -5,6 +5,7 @@ extends CanvasLayer
 
 signal host_requested()
 signal join_requested(url: String)
+signal login_requested()   # 打开登录界面（账号/云存档）
 
 const DEFAULT_URL := "ws://127.0.0.1:8971"
 
@@ -103,6 +104,11 @@ func _build() -> void:
 	join_btn.text = "加入"
 	join_btn.pressed.connect(submit_join)
 	v.add_child(join_btn)
+
+	var login_btn := Button.new()
+	login_btn.text = "登录 / 账号（云存档）"
+	login_btn.pressed.connect(func() -> void: close(); login_requested.emit())
+	v.add_child(login_btn)
 
 	var hint := Label.new()
 	hint.text = "N 开关此菜单 · Esc 关闭"

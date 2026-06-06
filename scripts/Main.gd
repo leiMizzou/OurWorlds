@@ -29,6 +29,8 @@ const NetworkManager = preload("res://scripts/NetworkManager.gd")
 const RemoteAvatar = preload("res://scripts/RemoteAvatar.gd")
 const WorldData = preload("res://scripts/WorldData.gd")
 const NetMenu = preload("res://scripts/NetMenu.gd")
+const NakamaClient = preload("res://scripts/NakamaClient.gd")
+const LoginScreen = preload("res://scripts/LoginScreen.gd")
 
 const DAY_LEN := 180.0   # 一个昼夜 180 秒
 const AUTO_SAVE_INTERVAL := 18.0
@@ -61,6 +63,9 @@ var photo_overlay: PhotoOverlay
 var chat_hub
 var chat_panel: ChatPanel
 var net_menu: NetMenu
+var nakama_client: NakamaClient
+var login_screen: LoginScreen
+var _session := {}                 # 登录后的 Nakama 会话（token/user_id）；空=游客。入场票/云存档用
 var _net_mode: int = NetworkManager.Mode.OFFLINE
 var net_manager: NetworkManager
 
@@ -310,6 +315,18 @@ func _enter_world(seed_value: int, spawn_override) -> void:
 	net_menu.setup()
 	net_menu.host_requested.connect(_on_net_host_requested)
 	net_menu.join_requested.connect(_on_net_join_requested)
+	# 账号（M4）：默认游客；登录(经 Nakama)用于持久身份 + 云存档（连世界服务器时作入场票）。
+	nakama_client = NakamaClient.new()
+	nakama_client.name = "NakamaClient"
+	if OS.has_environment("OW_NAKAMA"):
+		nakama_client.base_url = OS.get_environment("OW_NAKAMA")
+	add_child(nakama_client)
+	login_screen = LoginScreen.new()
+	login_screen.name = "LoginScreen"
+	add_child(login_screen)
+	login_screen.setup(nakama_client)
+	login_screen.logged_in.connect(_on_logged_in)
+	net_menu.login_requested.connect(func() -> void: login_screen.open())
 	_setup_agent_bridge()
 
 # 代理桥（仅在设置了 OW_AGENT_PORT 时启用）：让外部 LLM 经 TCP/NDJSON 感知并操作游戏。
@@ -701,6 +718,13 @@ func _on_net_host_requested() -> void:
 		return
 	_net_mode = NetworkManager.Mode.HOST
 	_start_host_after_enter()
+
+func _on_logged_in(session: Dictionary) -> void:
+	# 存下会话（token/user_id），供连世界服务器时作入场票 + 云存档键（握手/存档是后续 M4 步骤）。
+	_session = session
+	if hud != null and hud.has_method("show_feedback"):
+		var who := str(session.get("user_id", ""))
+		hud.show_feedback("account", "已登录" + (("：" + who.substr(0, 8)) if who != "" else ""))
 
 func _on_net_join_requested(url: String) -> void:
 	# 以客户端身份加入：设连接地址并重载场景，由 _ready 走 CLIENT 分支。
