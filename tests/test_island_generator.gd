@@ -2,6 +2,7 @@ extends SceneTree
 # IslandGenerator 自检：确定性 / 有界（界外空气）/ 扇区划分。
 const IslandGenerator = preload("res://scripts/IslandGenerator.gd")
 const Chunk = preload("res://scripts/Chunk.gd")
+const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
 
 var failed := 0
 func check(c: bool, m: String) -> void:
@@ -39,6 +40,23 @@ func _initialize() -> void:
 		for sz in [-IslandGenerator.HALF + 8, 0, IslandGenerator.HALF - 8]:
 			corners[g.sector_cell(sx, sz)] = true
 	check(corners.size() == 9, "九宫格采样覆盖全部 9 个扇区")
+
+	# 各扇区地表方块属于其主题族
+	var snow_xz := [-IslandGenerator.HALF + 40, -IslandGenerator.HALF + 40]   # 北-西 = 雪山
+	check(top_block(g, snow_xz[0], snow_xz[1]) == BlockLibrary.SNOW, "雪山扇区地表=雪")
+	var desert_xz := [0, -IslandGenerator.HALF + 40]                          # 北-中 = 沙漠
+	var dtop := top_block(g, desert_xz[0], desert_xz[1])
+	check(dtop == BlockLibrary.SAND or dtop == BlockLibrary.RED_SAND, "沙漠扇区地表=沙/红沙")
+	var cyber_xz := [IslandGenerator.HALF - 40, 0]                            # 中-东 = 赛博
+	check(top_block(g, cyber_xz[0], cyber_xz[1]) == BlockLibrary.STEEL_BLOCK, "赛博扇区地基=钢块")
+	var obs_xz := [-IslandGenerator.HALF + 40, IslandGenerator.HALF - 40]     # 南-西 = 天文台
+	check(top_block(g, obs_xz[0], obs_xz[1]) == BlockLibrary.MARBLE, "天文台扇区地基=大理石")
+
+	# region_label 在不同扇区给出不同标签
+	check(g.region_label(snow_xz[0], snow_xz[1]) != g.region_label(cyber_xz[0], cyber_xz[1]), "不同扇区 region_label 不同")
+
+	# 边缘：紧贴边界处地表显著低于中心（崖壁）
+	check(g.surface_height(0, 0) - g.surface_height(IslandGenerator.HALF - 1, 0) >= IslandGenerator.EDGE - 1, "边缘地表跌落成崖")
 
 	if failed == 0: print("✅ ALL ISLANDGEN TESTS PASSED")
 	else: printerr("❌ ", failed, " 个 IslandGenerator 测试失败")
