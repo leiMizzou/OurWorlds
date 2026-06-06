@@ -303,6 +303,7 @@ func _enter_world(seed_value: int, spawn_override) -> void:
 	chat_panel = ChatPanel.new()
 	add_child(chat_panel)
 	chat_panel.setup(chat_hub, "player")
+	chat_panel.visit_requested.connect(_on_visit_requested)
 	net_menu = NetMenu.new()
 	net_menu.name = "NetMenu"
 	add_child(net_menu)
@@ -705,6 +706,25 @@ func _on_net_join_requested(url: String) -> void:
 	# 以客户端身份加入：设连接地址并重载场景，由 _ready 走 CLIENT 分支。
 	OS.set_environment("OW_CONNECT", url)
 	get_tree().reload_current_scene()
+
+func _on_visit_requested(eid: String) -> void:
+	teleport_to_peer(eid)
+
+# 传送到某玩家旁边参观（在线列表点「前往」触发；坐标取自联机快照）。
+func teleport_to_peer(eid: String) -> void:
+	if net_manager == null or not net_manager.has_method("peer_position") or player == null:
+		return
+	var pos: Vector3 = net_manager.peer_position(eid)
+	if pos.x == INF:
+		if hud != null and hud.has_method("show_feedback"):
+			hud.show_feedback("teleport", "对方不在线")
+		return
+	world.prime(world.chunk_of(int(pos.x), int(pos.z)), 1)   # 同步生成落点区块，落地即可踩
+	player.global_position = pos + Vector3(0, 1.5, 0)         # 抬一点，落在对方旁边
+	player.velocity = Vector3.ZERO
+	set_chat_active(false)                                    # 关聊天面板，回到游戏
+	if hud != null and hud.has_method("show_feedback"):
+		hud.show_feedback("teleport", "已传送过去参观")
 
 func _return_to_title_from_pause() -> void:
 	if _title_active:

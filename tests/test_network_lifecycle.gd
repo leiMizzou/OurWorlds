@@ -27,6 +27,11 @@ func _initialize() -> void:
 		ids.append(str((e as Dictionary).get("id", "")))
 	check(e1 in ids and e2 in ids, "联机玩家进入 ChatHub 在线列表")
 
+	# peer_position（"去找ta/瞬移"用）：取到该玩家位置；未知 eid 返回 INF 哨兵
+	nm.set_peer_transform(11, Vector3(5, 40, 7), 1.0)
+	check(nm.peer_position(e1) == Vector3(5, 40, 7), "peer_position 取到该玩家位置")
+	check(nm.peer_position("ghost") == Vector3(INF, INF, INF), "未知 eid → INF 哨兵")
+
 	nm.drop_peer(11)
 	check(nm.peer_eids().size() == 1, "断开后名册剩 1")
 	var ids2 := []

@@ -63,6 +63,16 @@ func set_peer_transform(peer_id: int, pos: Vector3, yaw: float) -> void:
 	_peers[peer_id]["pos"] = pos
 	_peers[peer_id]["yaw"] = yaw
 
+# 某玩家当前位置（"去找ta"用）。客户端从收到的快照 avatar 取；服务器/HOST 从 _peers 取。
+# 找不到返回 INF 哨兵（调用方据此判断该 eid 是否在线）。
+func peer_position(eid: String) -> Vector3:
+	if _avatars.has(eid) and is_instance_valid(_avatars[eid]):
+		return (_avatars[eid] as Node3D).global_position
+	for pid in _peers:
+		if str(_peers[pid]["eid"]) == eid:
+			return _peers[pid]["pos"]
+	return Vector3(INF, INF, INF)
+
 func peer_eids() -> Array:
 	var out := []
 	for pid in _peers:

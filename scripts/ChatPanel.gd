@@ -3,6 +3,8 @@ extends CanvasLayer
 # 数据来自 ChatHub（Main 注入）。Main 用 Enter 打开本面板；面板内 LineEdit Enter 发送。
 # 纯读 ChatHub，所以 presence_names()/rendered_log() 等可在 headless 下直接断言。
 
+signal visit_requested(target_id: String)   # 在线列表点"前往" → Main 把玩家传送到该玩家旁
+
 var chat_hub
 var player_id := "player"
 var current_channel := ""            # "" = 公共大厅；否则 = 私聊对象 entity id
@@ -107,12 +109,21 @@ func _refresh_presence() -> void:
 		var eid := str(e["id"])
 		var icon := "🧑" if str(e["kind"]) == "human" else "🤖"
 		var status := str(e.get("status", ""))
+		var row := HBoxContainer.new()
 		var btn := Button.new()
 		btn.text = "%s %s%s" % [icon, str(e["name"]), ("  ·  " + status if status != "" else "")]
 		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		var target := "" if eid == player_id else eid    # 点自己 = 回大厅
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var target := "" if eid == player_id else eid    # 点名字：自己=回大厅，别人=私聊
 		btn.pressed.connect(func() -> void: set_channel(target))
-		_presence_box.add_child(btn)
+		row.add_child(btn)
+		if eid != player_id:                              # 别人：加「前往」按钮，传送过去参观
+			var go := Button.new()
+			go.text = "前往"
+			go.tooltip_text = "传送到 ta 旁边参观"
+			go.pressed.connect(func() -> void: visit_requested.emit(eid))
+			row.add_child(go)
+		_presence_box.add_child(row)
 
 func _refresh_log() -> void:
 	if _channel_label != null:
