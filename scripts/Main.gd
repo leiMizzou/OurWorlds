@@ -159,7 +159,8 @@ func _enter_world(seed_value: int, spawn_override) -> void:
 	_current_seed = seed_value
 	_setup_celestial_bodies()
 	var save_file := _save_path_for_seed(_current_seed)
-	world.setup(lib, _current_seed, save_file)
+	var kind := _resolve_world_kind(save_file)
+	world.setup(lib, _current_seed, save_file, kind)
 	world.set_view_radius(int(_settings.get("view_radius", 4)))
 	if OS.has_environment("VC_RADIUS"):
 		world.set_view_radius(int(OS.get_environment("VC_RADIUS")))
@@ -456,6 +457,15 @@ func _save_path_for_seed(seed: int) -> String:
 	if OS.has_environment("VC_NO_SAVE"):
 		return ""
 	return WorldCatalog.save_path_for_seed(seed)
+
+# 解析本次进入世界的 kind：存档已存在 -> 读存档元数据；否则看新建时设的环境变量；再否则 infinite。
+func _resolve_world_kind(save_file: String) -> String:
+	var meta := WorldCatalog._read_world_meta(save_file)
+	if not meta.is_empty():
+		return str(meta.get("kind", "infinite"))
+	if OS.has_environment("VC_WORLD_KIND"):
+		return OS.get_environment("VC_WORLD_KIND")
+	return "infinite"
 
 func _find_spawn_position() -> Vector3:
 	var best := Vector3(0.5, world.surface_y(0, 0) + 3, 0.5)
@@ -1296,11 +1306,12 @@ func _continue_selected_world(seed: int) -> void:
 	else:
 		set_title_active(false)
 
-func _start_new_world(seed: int = 0) -> void:
+func _start_new_world(seed: int = 0, kind: String = "infinite") -> void:
 	if world != null:
 		world.save_world(true)
 	var next_seed := seed if seed > 0 else _random_seed()
 	OS.set_environment("VC_SEED", str(next_seed))
+	OS.set_environment("VC_WORLD_KIND", kind)
 	get_tree().paused = false
 	get_tree().reload_current_scene()
 

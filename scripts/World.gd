@@ -519,6 +519,9 @@ func region_total() -> int:
 	return WorldGenerator.REGION_LABELS.size()
 
 func load_world() -> bool:
+	# 注：存档里的 "kind" 不在此读取 —— 它总是由 setup() 的调用方提供
+	# （Main 进入世界前会用 WorldCatalog 元数据解析出 kind 再传给 setup）。
+	# 若将来新增"不经 setup() 直接 load_world()"的路径，必须先解析 kind 并传给 setup()。
 	_loaded_from_backup = false
 	if save_path == "" or (not FileAccess.file_exists(save_path) and not FileAccess.file_exists(_backup_save_path())):
 		return false
