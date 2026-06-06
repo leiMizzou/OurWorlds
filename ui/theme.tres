@@ -1,10 +1,12 @@
-[gd_resource type="Theme" load_steps=10 format=3 uid="uid://b0vxc1theme01"]
+[gd_resource type="Theme" load_steps=11 format=3 uid="uid://b0vxc1theme01"]
+
+[ext_resource type="FontFile" path="res://ui/fonts/NotoSansSC-OurWorlds.ttf" id="1_uifont"]
 
 ; OurWorlds 统一主题 —— 给 Godot 默认控件套上与自绘深色面板一致的“商用质感”。
 ; 字阶（Label type variations）：H1 / H2 / Body / Caption
 ; 按钮四态：normal / hover / pressed / disabled（深底、圆角、细描边、hover 提亮）
 ; 面板：Panel / PanelContainer 深色半透明、圆角、描边
-; 字体：保留 Godot 默认字体（系统回退可正常渲染中文），本主题只统一字阶/按钮/面板。
+; 字体：打包 Noto Sans SC 子集（OFL）做默认字体 —— Web 无系统字体回退，必须自带 CJK 字形。
 
 [sub_resource type="StyleBoxFlat" id="btn_normal"]
 content_margin_left = 14.0
@@ -151,6 +153,7 @@ corner_radius_bottom_right = 6
 corner_radius_bottom_left = 6
 
 [resource]
+default_font = ExtResource("1_uifont")
 default_font_size = 15
 
 ; ---- Label 字阶 type variations ----
