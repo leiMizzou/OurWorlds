@@ -145,7 +145,7 @@ func _build() -> void:
 	margin.add_child(box)
 
 	var title := Label.new()
-	title.text = "VoxelCraft"
+	title.text = "OurWorlds"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 28)
 	title.modulate = Color(1, 1, 1, 0.96)

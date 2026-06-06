@@ -66,7 +66,7 @@ func _process(_delta: float) -> bool:
 		_main._unhandled_input(ev)
 		check(not _main._photo_mode and _main.hud.visible and not _main.photo_overlay.is_active(), "F1 可关闭拍照模式")
 		var screenshot_path: String = _main._screenshot_path()
-		check(screenshot_path.begins_with("user://screenshots/voxelcraft_") and screenshot_path.ends_with(".png"), "截图路径写入用户截图目录")
+		check(screenshot_path.begins_with("user://screenshots/ourworlds_") and screenshot_path.ends_with(".png"), "截图路径写入用户截图目录")
 		var f2 := InputEventKey.new()
 		f2.pressed = true
 		f2.keycode = KEY_F2

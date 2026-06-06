@@ -25,6 +25,8 @@ var _coords_label: Label
 var _compass_label: Label
 var _feedback_label: Label
 var _control_hint_label: Label
+var _agent_badge_panel: PanelContainer
+var _agent_badge_label: Label
 var _control_hint_panel: PanelContainer
 var _crosshair: Control
 var _crosshair_center: Control
@@ -104,6 +106,7 @@ func _build() -> void:
 	_build_intent(root)
 	_build_feedback(root)
 	_build_control_hint(root)
+	_build_agent_badge(root)
 	_build_hotbar(root)
 
 func _build_crosshair(root: Control) -> void:
@@ -292,6 +295,52 @@ func _build_feedback(root: Control) -> void:
 	_feedback_label.offset_top = _feedback_base_top
 	_feedback_label.offset_bottom = _feedback_base_bottom
 	root.add_child(_feedback_label)
+
+func _build_agent_badge(root: Control) -> void:
+	# 右上角常驻角标：当 agent 经 OW_AGENT_PORT 连入时显示「🤖 agent 已连接 · 目标：…」。
+	_agent_badge_panel = PanelContainer.new()
+	_agent_badge_panel.name = "AgentBadge"
+	_agent_badge_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_agent_badge_panel.anchor_left = 1.0
+	_agent_badge_panel.anchor_right = 1.0
+	_agent_badge_panel.anchor_top = 0.0
+	_agent_badge_panel.anchor_bottom = 0.0
+	_agent_badge_panel.offset_left = -372
+	_agent_badge_panel.offset_right = -16
+	_agent_badge_panel.offset_top = 16
+	_agent_badge_panel.offset_bottom = 50
+	_agent_badge_panel.add_theme_stylebox_override("panel", _panel_style(Color(0.04, 0.09, 0.06, 0.62), Color(0.36, 1.0, 0.62, 0.5), 1))
+	_agent_badge_panel.visible = false
+	root.add_child(_agent_badge_panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 12)
+	margin.add_theme_constant_override("margin_right", 12)
+	margin.add_theme_constant_override("margin_top", 5)
+	margin.add_theme_constant_override("margin_bottom", 5)
+	_agent_badge_panel.add_child(margin)
+
+	_agent_badge_label = Label.new()
+	_agent_badge_label.theme_type_variation = "Body"
+	_agent_badge_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_agent_badge_label.clip_text = true
+	_agent_badge_label.text = "🤖 agent 已连接"
+	_agent_badge_label.modulate = Color(0.82, 1.0, 0.9, 1.0)
+	margin.add_child(_agent_badge_label)
+
+# 由 AgentBridge 在 agent 连接/断开/设目标时调用，让玩家直观看到 agent 正在游玩。
+func set_agent_status(connected: bool, goal: String = "") -> void:
+	if _agent_badge_panel == null:
+		return
+	_agent_badge_panel.visible = connected
+	if connected:
+		var t := "🤖 agent 已连接"
+		var g := goal.strip_edges()
+		if g != "":
+			if g.length() > 50:
+				g = g.substr(0, 50) + "…"
+			t += "  ·  目标：" + g
+		_agent_badge_label.text = t
 
 func _build_control_hint(root: Control) -> void:
 	# 新手控制提示：首次进世界在屏幕中央淡入一行，完成第一次挖掘后淡出。纯 HUD 状态驱动。

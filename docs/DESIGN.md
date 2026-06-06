@@ -1,4 +1,4 @@
-# VoxelCraft — 设计文档
+# OurWorlds — 设计文档
 
 一个像《我的世界》的体素沙盒。目标：**宏大**、可无限延伸、专心建造（创造模式）。
 引擎：**Godot 4.6 + 纯 GDScript**，从零实现，不依赖第三方体素库。
@@ -59,10 +59,10 @@
 
 ## 怎么运行
 
-- 编辑器：用 Godot 打开 `VoxelCraft` 工程，按 **F5**。
-- 命令行：`godot --path VoxelCraft`
-- 截宏大全景：`VC_RADIUS=5 godot --path VoxelCraft --script res://tests/shot_world.gd`
-- 自检：`godot --headless --path VoxelCraft --script res://tests/test_mesher.gd`（造网格逻辑）；`test_play.gd`（进游戏路径）
+- 编辑器：用 Godot 打开 `OurWorlds` 工程，按 **F5**。
+- 命令行：`godot --path OurWorlds`
+- 截宏大全景：`VC_RADIUS=5 godot --path OurWorlds --script res://tests/shot_world.gd`
+- 自检：`godot --headless --path OurWorlds --script res://tests/test_mesher.gd`（造网格逻辑）；`test_play.gd`（进游戏路径）
 
 ## 里程碑
 

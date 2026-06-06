@@ -48,13 +48,13 @@ func set_index(i: int, id: int) -> void:
 
 - [ ] **Step 2: 语法自检**
 
-Run: `godot --headless --path /Users/mac/Documents/GitHub/3DGames/VoxelCraft --check-only scripts/Chunk.gd`
+Run: `godot --headless --path . --check-only scripts/Chunk.gd`
 Expected: 无 `SCRIPT ERROR`（命令静默或仅打印引擎横幅即通过）。
 
 - [ ] **Step 3: 提交**
 
 ```bash
-cd /Users/mac/Documents/GitHub/3DGames/VoxelCraft
+cd .
 git add scripts/Chunk.gd
 git commit -m "feat(voxel): Chunk add get_index/set_index for delta overlay"
 ```
@@ -113,7 +113,7 @@ func _initialize() -> void:
 
 - [ ] **Step 2: 运行，确认失败**
 
-Run: `godot --headless --path /Users/mac/Documents/GitHub/3DGames/VoxelCraft --script res://tests/test_delta_store.gd`
+Run: `godot --headless --path . --script res://tests/test_delta_store.gd`
 Expected: 报错 `Failed to load script ... WorldDeltaStore.gd`（文件还不存在）。
 
 - [ ] **Step 3: 实现 WorldDeltaStore**
@@ -184,7 +184,7 @@ func apply_to_chunk(cc: Vector2i, chunk) -> void:
 
 - [ ] **Step 4: 运行，确认通过**
 
-Run: `godot --headless --path /Users/mac/Documents/GitHub/3DGames/VoxelCraft --script res://tests/test_delta_store.gd`
+Run: `godot --headless --path . --script res://tests/test_delta_store.gd`
 Expected: `✅ ALL DELTA STORE TESTS PASSED`，退出码 0。
 
 - [ ] **Step 5: 提交**
@@ -253,7 +253,7 @@ func _initialize() -> void:
 
 - [ ] **Step 2: 运行，确认失败**
 
-Run: `godot --headless --path /Users/mac/Documents/GitHub/3DGames/VoxelCraft --script res://tests/test_world_data.gd`
+Run: `godot --headless --path . --script res://tests/test_world_data.gd`
 Expected: 报错找不到 `WorldData.gd`。
 
 - [ ] **Step 3: 实现 WorldData**
@@ -344,7 +344,7 @@ func unload(cc: Vector2i) -> void:
 
 - [ ] **Step 4: 运行，确认通过**
 
-Run: `godot --headless --path /Users/mac/Documents/GitHub/3DGames/VoxelCraft --script res://tests/test_world_data.gd`
+Run: `godot --headless --path . --script res://tests/test_world_data.gd`
 Expected: `✅ ALL WORLD DATA TESTS PASSED`，退出码 0。
 
 - [ ] **Step 5: 提交**
@@ -501,7 +501,7 @@ func _unload_far(c: Vector2i) -> void:
 
 - [ ] **Step 4: 语法自检**
 
-Run: `godot --headless --path /Users/mac/Documents/GitHub/3DGames/VoxelCraft --check-only scripts/World.gd`
+Run: `godot --headless --path . --check-only scripts/World.gd`
 Expected: 无 `SCRIPT ERROR`。
 
 - [ ] **Step 5: 提交**
@@ -549,7 +549,7 @@ const WORLD_SEED := 1337
 
 - [ ] **Step 3: 语法自检**
 
-Run: `godot --headless --path /Users/mac/Documents/GitHub/3DGames/VoxelCraft --check-only scripts/Player.gd` 然后 `... --check-only scripts/Main.gd`
+Run: `godot --headless --path . --check-only scripts/Player.gd` 然后 `... --check-only scripts/Main.gd`
 Expected: 均无 `SCRIPT ERROR`。
 
 - [ ] **Step 4: 提交**
@@ -581,7 +581,7 @@ git commit -m "refactor(voxel): Player uses request_edit; Main injects world see
 
 Run（逐条）：
 ```bash
-cd /Users/mac/Documents/GitHub/3DGames/VoxelCraft
+cd .
 godot --headless --path . --script res://tests/test_delta_store.gd
 godot --headless --path . --script res://tests/test_world_data.gd
 godot --headless --path . --script res://tests/test_mesher.gd
@@ -593,7 +593,7 @@ Expected：
 
 - [ ] **Step 3: 真机烟测（手动）**
 
-Run: `godot --path /Users/mac/Documents/GitHub/3DGames/VoxelCraft`
+Run: `godot --path .`
 确认：能进游戏、走动、挖/放、F5 切视角；**走远让区块卸载，再走回来，之前挖/放的改动仍在**（这是 M0 的核心验收点：增量跨卸载/重载保留）。
 
 - [ ] **Step 4: 提交**

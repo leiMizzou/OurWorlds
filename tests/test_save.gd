@@ -18,7 +18,7 @@ func check(cond: bool, msg: String) -> void:
 		printerr("  FAIL ", msg)
 
 func _initialize() -> void:
-	var path := "user://tests/voxelcraft_save_test.json"
+	var path := "user://tests/ourworlds_save_test.json"
 	_remove_file(path)
 	_remove_file(path + ".bak")
 	_remove_file(path + ".tmp")
@@ -79,7 +79,7 @@ func _initialize() -> void:
 	var landmark2 := landmark + Vector3i(1, 0, 0)
 	check(w3.mark_landmark_discovered(landmark2), "仅记录新发现也会改变世界元数据")
 	check(w3.mark_journey_step("place_block"), "仅记录新旅程也会改变世界元数据")
-	var cover_path := "user://tests/voxelcraft_cover.png"
+	var cover_path := "user://tests/ourworlds_cover.png"
 	w3.set_cover_path(cover_path)
 	check(w3.mark_region_visited("雪峰"), "仅记录新区域也会改变世界元数据")
 	check(w3.cover_path == cover_path, "封面路径写入世界元数据")

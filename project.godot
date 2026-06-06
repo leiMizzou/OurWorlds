@@ -1,10 +1,10 @@
-; Godot 工程配置 —— VoxelCraft（像《我的世界》的体素沙盒）
+; Godot 工程配置 —— OurWorlds（3D 体素创造沙盒）
 config_version=5
 
 [application]
 
-config/name="VoxelCraft"
-config/description="一个像《我的世界》的体素沙盒：宏大、可无限延伸、专心建造。"
+config/name="OurWorlds"
+config/description="一个宏大、可无限延伸的 3D 体素创造沙盒：专心建造。"
 config/version="1.0.0"
 run/main_scene="res://scenes/Main.tscn"
 config/icon="res://icon.png"

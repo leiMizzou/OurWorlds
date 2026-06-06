@@ -5,7 +5,7 @@ set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GODOT="${GODOT:-godot}"
 pass=0; fail=0; failed_list=""
-echo "== VoxelCraft headless 自检 =="
+echo "== OurWorlds headless 自检 =="
 for f in "$HERE"/tests/test_*.gd; do
   name="$(basename "$f")"
   out="$("$GODOT" --headless --path "$HERE" --script "res://tests/$name" 2>&1)"

@@ -21,6 +21,8 @@ const DiscoveryTracker = preload("res://scripts/DiscoveryTracker.gd")
 const LandmarkMarker = preload("res://scripts/LandmarkMarker.gd")
 const HomeBeacon = preload("res://scripts/HomeBeacon.gd")
 const PhotoOverlay = preload("res://scripts/PhotoOverlay.gd")
+const AgentBridge = preload("res://scripts/AgentBridge.gd")
+const AgentAvatar = preload("res://scripts/AgentAvatar.gd")
 
 const DAY_LEN := 180.0   # 一个昼夜 180 秒
 const AUTO_SAVE_INTERVAL := 18.0
@@ -258,6 +260,25 @@ func _ready() -> void:
 	else:
 		set_title_active(true)
 	_show_backup_recovery_feedback_if_needed()
+	_setup_agent_bridge()
+
+# 代理桥（仅在设置了 OW_AGENT_PORT 时启用）：让外部 LLM 经 TCP/NDJSON 感知并操作游戏。
+# 行为完全在该 flag 之后，正常游玩不受影响。
+func _setup_agent_bridge() -> void:
+	if not OS.has_environment("OW_AGENT_PORT"):
+		return
+	var bridge := AgentBridge.new()
+	bridge.name = "AgentBridge"
+	bridge.world = world
+	bridge.player = player
+	bridge.hud = hud
+	# opc-ourworlds 的专属身体：跟玩家分开，桥驱动它
+	var ai_avatar := AgentAvatar.new()
+	ai_avatar.name = "AgentAvatar"
+	world.add_child(ai_avatar)
+	ai_avatar.global_position = player.global_position + Vector3(3, 0, 0)
+	bridge.avatar = ai_avatar
+	add_child(bridge)
 
 func _initial_seed() -> int:
 	if OS.has_environment("VC_SEED"):
@@ -690,7 +711,7 @@ func _screenshot_path() -> String:
 		int(dt.get("hour", 0)), int(dt.get("minute", 0)), int(dt.get("second", 0)),
 		int(Time.get_ticks_msec() % 1000),
 	]
-	return "%s/voxelcraft_%s.png" % [SCREENSHOT_DIR, stamp]
+	return "%s/ourworlds_%s.png" % [SCREENSHOT_DIR, stamp]
 
 func _show_screenshot_feedback(ok: bool, path: String) -> void:
 	if hud == null:

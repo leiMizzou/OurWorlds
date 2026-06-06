@@ -71,14 +71,24 @@ var _anim_amount := 0.0            # 走路动画幅度（移动淡入、静止�
 var _cape: Node3D                  # 披风（站立下垂、飞行后扬）
 var _fly_amount := 0.0             # 飞行(超人)姿态混合
 var _anim_t := 0.0                 # 动画计时（披风抖动）
-# 隐藏技能：飞行中依次按出 KAMEHAMEHA 发射龟派气功波，气化前方一大条方块。
-const KAMEHAMEHA_SEQ := "KAMEHAMEHA"
-const KAME_RADIUS := 5
-const KAME_LENGTH := 64
-var _combo := ""
+# 隐藏技能：飞行中长按 C 蓄力 ≥5 秒，松手发射龟派气功波（蓄越久威力越大）。
+const KAME_KEY := KEY_C
+const KAME_CHARGE_MIN := 5.0
+const KAME_CHARGE_MAX := 8.0
+const KAME_RADIUS := 4
+const KAME_RADIUS_MAX := 7
+const KAME_LENGTH := 50
+const KAME_LENGTH_MAX := 92
+var _kame_charge := 0.0
+var _charging := false
 var _kame_cooldown := 0.0
 var _kame_fire_t := 0.0
-var _kame_offsets := []
+var _charge_ball: MeshInstance3D
+var _charge_mat: StandardMaterial3D
+var _cine_cam: Camera3D            # 放招运镜相机（侧面电影感）
+var _cine_t := 0.0                 # 运镜保持计时（发射后）
+var _kame_beam_from := Vector3.ZERO   # 光柱起点(小人)/终点(命中)，给全景运镜框图
+var _kame_beam_to := Vector3.ZERO
 var highlight: MeshInstance3D
 var placement_preview: MeshInstance3D
 var placement_blocked_preview: MeshInstance3D
@@ -137,6 +147,13 @@ func _ready() -> void:
 	avatar = _make_avatar()
 	avatar.visible = false                   # 第一人称看不到自己（正常）
 	add_child(avatar)
+	_charge_ball = _beam_ball(0.6, Color(0.62, 0.92, 1.0), 3.0)   # 蓄力能量球
+	_charge_ball.visible = false
+	_charge_mat = _charge_ball.mesh.material
+	add_child(_charge_ball)
+	_cine_cam = Camera3D.new()                                   # 放招侧面运镜相机
+	_cine_cam.fov = 55
+	add_child(_cine_cam)
 
 	highlight = _make_highlight()
 	placement_preview = _make_placement_preview()
@@ -257,7 +274,6 @@ func _input(event: InputEvent) -> void:
 		_on_click(event.button_index)
 
 func _on_key(code: int) -> void:
-	_kame_combo_key(code)
 	if _action_matches("toggle_view", code):
 		_toggle_view()
 	elif _action_matches("jump", code):
@@ -429,6 +445,8 @@ func _try_break_target() -> bool:
 func _physics_process(delta: float) -> void:
 	_kame_cooldown = maxf(0.0, _kame_cooldown - delta)
 	_kame_fire_t = maxf(0.0, _kame_fire_t - delta)
+	_update_kame_charge(delta)
+	_update_cinematic(delta)
 	if not input_enabled:
 		velocity = Vector3.ZERO
 		return
@@ -709,6 +727,51 @@ func build_template_orientation_label() -> String:
 	if build_template_id() == "off":
 		return ""
 	return "东西" if template_orientation_index == 0 else "南北"
+
+# ---------- 外部代理 / 脚本入口：按模板 id 在指定锚点一键放置 ----------
+# 复用游戏内建造模板系统：临时设好模板上下文(_place/朝向/索引)，用 _placement_edits()
+# 算出与游戏内放置完全一致的方块清单，再走 World.request_block_edits 提交（单次撤销 + 每块单次重建），
+# 最后无条件还原所有被临时改动的状态，保证不影响真人游玩。
+# template_id：BUILD_TEMPLATES 里的 id（如 "campfire"）；"off" 非法。
+# orientation：0=东西，1=南北。返回实际改动的方块数；模板未知返回 -1。
+func apply_build_template(template_id: String, origin: Vector3i, orientation: int = 0) -> int:
+	if world == null:
+		return -1
+	var target_index := _build_template_index_for(template_id)
+	if target_index < 0 or template_id == "off":
+		return -1
+	# 快照需要临时改动的状态
+	var saved_template_index := template_index
+	var saved_orientation := template_orientation_index
+	var saved_place := _place
+	var saved_target := _target
+	var saved_normal := _target_normal
+	var saved_has_target := _has_target
+	var changed := 0
+	template_index = target_index
+	template_orientation_index = posmod(orientation, 2)
+	_place = origin
+	_target = origin - Vector3i.UP
+	_target_normal = Vector3i.UP
+	_has_target = true
+	var edits := _placement_edits()
+	if world.has_method("request_block_edits"):
+		changed = int(world.request_block_edits(edits))
+	# 还原
+	template_index = saved_template_index
+	template_orientation_index = saved_orientation
+	_place = saved_place
+	_target = saved_target
+	_target_normal = saved_normal
+	_has_target = saved_has_target
+	return changed
+
+func _build_template_index_for(template_id: String) -> int:
+	for i in range(BUILD_TEMPLATES.size()):
+		var meta: Dictionary = BUILD_TEMPLATES[i]
+		if String(meta.get("id", "")) == template_id:
+			return i
+	return -1
 
 func _toggle_build_template() -> void:
 	_step_build_template(1)
@@ -1360,51 +1423,127 @@ func _animate_avatar(delta: float, walking: bool, running: bool) -> void:
 	if _cape != null:
 		var cape_ground := 0.16 + sin(_bob) * 0.06 * _anim_amount
 		_cape.rotation.x = lerpf(cape_ground, -1.75 + flutter, _fly_amount)
-	# 放波瞬间：双手前推（龟派气功波收招姿）
+	# 龟派气功波手臂配合：蓄力时双手前伸合拢抱住能量球；发射瞬间双手猛推到底
 	if _kame_fire_t > 0.0:
-		if _arm_l != null: _arm_l.rotation.x = -2.55
-		if _arm_r != null: _arm_r.rotation.x = -2.55
+		if _arm_l != null: _arm_l.rotation.x = -2.85
+		if _arm_r != null: _arm_r.rotation.x = -2.85
+	elif _charging:
+		# 随蓄力从微张到合拢前伸（抱球感）
+		var cup := lerpf(-2.25, -2.55, clampf(_kame_charge / KAME_CHARGE_MIN, 0.0, 1.0))
+		if _arm_l != null: _arm_l.rotation.x = cup
+		if _arm_r != null: _arm_r.rotation.x = cup
 
-# ---------- 隐藏技能：龟派气功波 ----------
-# 飞行中依次按出 KAMEHAMEHA 的字母即触发。
-func _kame_combo_key(code: int) -> void:
-	if not fly:
-		_combo = ""
-		return
-	if code < KEY_A or code > KEY_Z:
-		return
-	_combo += char(code)
-	if _combo.length() > 14:
-		_combo = _combo.right(14)
-	if _combo.ends_with(KAMEHAMEHA_SEQ) and _kame_cooldown <= 0.0:
-		_combo = ""
-		_fire_kamehameha()
-
+# ---------- 隐藏技能：龟派气功波（飞行中长按 C 蓄力 ≥5 秒，松手发射；蓄越久威力越大）----------
 func _aim_dir() -> Vector3:
 	return (global_transform.basis * (Basis(Vector3.RIGHT, pitch) * Vector3(0, 0, -1))).normalized()
 
-func _fire_kamehameha() -> void:
+func _update_kame_charge(delta: float) -> void:
+	var can_charge := fly and input_enabled and _kame_cooldown <= 0.0
+	var holding := can_charge and Input.is_physical_key_pressed(KAME_KEY)
+	if holding:
+		_charging = true
+		_kame_charge = minf(_kame_charge + delta, KAME_CHARGE_MAX)
+		_update_charge_ball()
+	else:
+		if _charging and fly and input_enabled and _kame_charge >= KAME_CHARGE_MIN:
+			_fire_kamehameha(_kame_charge)
+		_charging = false
+		_kame_charge = 0.0
+		if _charge_ball != null:
+			_charge_ball.visible = false
+
+# 蓄力能量球：随蓄力变大变亮，满（≥5秒）后强烈脉动提示可发射。
+func _update_charge_ball() -> void:
+	if _charge_ball == null:
+		return
+	var frac := clampf(_kame_charge / KAME_CHARGE_MIN, 0.0, 1.0)
+	var ready := _kame_charge >= KAME_CHARGE_MIN
+	_charge_ball.global_position = spring.global_position + _aim_dir() * 1.9
+	var pulse := 1.0 + (0.15 * sin(_anim_t * 20.0) if ready else 0.0)
+	var s := lerpf(0.12, 0.95, frac) * pulse
+	_charge_ball.scale = Vector3(s, s, s)
+	_charge_ball.visible = true
+	if _charge_mat != null:
+		var e := lerpf(2.0, 7.5, frac)
+		if ready:
+			e += 3.0 + 2.0 * sin(_anim_t * 20.0)
+		_charge_mat.emission_energy_multiplier = e
+
+# 放招运镜：蓄力≥1秒起 + 发射后 1.2 秒，切到侧面电影机位；结束切回原相机。
+func _update_cinematic(delta: float) -> void:
+	if _cine_cam == null or camera == null:
+		return
+	if _cine_t > 0.0:
+		_cine_t = maxf(0.0, _cine_t - delta)
+	var want := (_charging and _kame_charge >= 1.0) or _cine_t > 0.0
+	if want:
+		if avatar != null:
+			avatar.visible = true          # 运镜时强制显示小人（即使第一人称也要看到他放招）
+		_position_cine_cam()
+		if not _cine_cam.current:
+			_cine_cam.current = true
+	elif _cine_cam.current:
+		camera.current = true              # 切回玩家原相机（第一/第三人称）
+		if avatar != null:
+			avatar.visible = view_mode != 0
+
+func _position_cine_cam() -> void:
+	var aim := _aim_dir()
+	# 发射后先近景 ~0.3 秒看清"猛推手 + 光柱喷出"，再拉成全景看整条光柱贯穿
+	if _cine_t > 0.0 and _cine_t <= 0.9 and _kame_beam_to != _kame_beam_from:
+		var a := _kame_beam_from
+		var b := _kame_beam_to
+		var mid := (a + b) * 0.5
+		var dir := (b - a).normalized()
+		var side := dir.cross(Vector3.UP).normalized()
+		if side.length() < 0.1:
+			side = global_transform.basis.x
+		var blen := a.distance_to(b)
+		var dist := blen * 0.6 + 8.0                        # 按光柱长度拉远
+		_cine_cam.fov = 62.0
+		# 高一点的 3/4 侧俯视：既看到整条光柱横贯，又能俯瞰命中点炸开的坑
+		_cine_cam.global_position = mid + side * dist + Vector3(0, clampf(blen * 0.42, 10.0, 42.0), 0)
+		_cine_cam.look_at(mid, Vector3.UP)
+		return
+	# 蓄力中：近景看小人聚气
+	var body: Vector3 = global_position + Vector3(0, 0.9, 0)
+	var side2 := aim.cross(Vector3.UP).normalized()
+	if side2.length() < 0.1:
+		side2 = global_transform.basis.x
+	_cine_cam.fov = 50.0
+	_cine_cam.global_position = body + side2 * 6.0 + Vector3(0, 1.7, 0) - aim * 1.0
+	_cine_cam.look_at(body + aim * 2.5, Vector3.UP)
+
+func _fire_kamehameha(charge: float = 5.0) -> void:
 	if world == null:
 		return
-	_kame_cooldown = 2.5
+	_kame_cooldown = 1.5
 	_kame_fire_t = 0.8
+	_cine_t = 1.2                                 # 发射后侧面运镜保持
+	var power := clampf((charge - KAME_CHARGE_MIN) / (KAME_CHARGE_MAX - KAME_CHARGE_MIN), 0.0, 1.0)
+	var radius := int(round(lerpf(float(KAME_RADIUS), float(KAME_RADIUS_MAX), power)))
+	var length := int(round(lerpf(float(KAME_LENGTH), float(KAME_LENGTH_MAX), power)))
 	var aim := _aim_dir()
 	var from: Vector3 = spring.global_position + aim * 1.2
-	_clear_beam_volume(from, aim)
-	_spawn_beam_visual(from, aim)
-	action_feedback.emit("mode", "龟・派・气・功・波！")
+	_kame_beam_from = from
+	_kame_beam_to = from + aim * float(length)
+	_clear_beam_volume(from, aim, radius, length)
+	_spawn_beam_visual(from, aim, radius, length)
+	if _charge_ball != null:
+		_charge_ball.visible = false
+	action_feedback.emit("mode", "龟派气功波！")
 
 # 沿气功波清出一条圆柱（球串）形的空腔。
-func _clear_beam_volume(from: Vector3, aim: Vector3) -> void:
-	var offsets := _sphere_offsets(KAME_RADIUS)
+func _clear_beam_volume(from: Vector3, aim: Vector3, radius: int, length: int) -> void:
+	var offsets := _sphere_offsets(radius)
 	var seen := {}
 	var t := 3.0
-	while t <= float(KAME_LENGTH):
+	while t <= float(length):
 		var c := from + aim * t
 		var bx := int(floor(c.x)); var by := int(floor(c.y)); var bz := int(floor(c.z))
 		for o in offsets:
 			seen[Vector3i(bx + o.x, by + o.y, bz + o.z)] = true
-		t += float(KAME_RADIUS) * 0.7
+		t += float(radius) * 0.7
 	var edits := []
 	for p in seen:
 		edits.append({"pos": p, "id": 0})
@@ -1412,46 +1551,76 @@ func _clear_beam_volume(from: Vector3, aim: Vector3) -> void:
 		world.request_block_edits(edits)
 
 func _sphere_offsets(r: int) -> Array:
-	if not _kame_offsets.is_empty():
-		return _kame_offsets
+	var out := []
 	var rr := r * r
 	for dx in range(-r, r + 1):
 		for dy in range(-r, r + 1):
 			for dz in range(-r, r + 1):
 				if dx * dx + dy * dy + dz * dz <= rr:
-					_kame_offsets.append(Vector3i(dx, dy, dz))
-	return _kame_offsets
+					out.append(Vector3i(dx, dy, dz))
+	return out
 
-func _spawn_beam_visual(from: Vector3, aim: Vector3) -> void:
+func _spawn_beam_visual(from: Vector3, aim: Vector3, radius: int, length: int) -> void:
 	var host := get_parent()
 	if host == null:
 		return
+	var start: Vector3 = from + aim * 0.6                  # 从手前(聚气球)位置喷出（侧面运镜，不怕糊屏）
+	var beam_len := maxf(float(length) - 0.6, 6.0)
+	var vis_r := clampf(float(radius) * 0.4, 1.0, 1.8)     # 偏圆形的细光柱（不铺满画面）
 	var node := Node3D.new()
 	host.add_child(node)
-	node.global_position = from
+	node.global_position = start
 	var up := Vector3.UP
 	if absf(aim.dot(Vector3.UP)) > 0.99:
 		up = Vector3.FORWARD
-	node.look_at(from + aim, up)
-	node.add_child(_beam_box(float(KAME_RADIUS) * 1.5, float(KAME_LENGTH), Color(0.30, 0.70, 1.0), 2.4, 0.42))
-	node.add_child(_beam_box(float(KAME_RADIUS) * 0.7, float(KAME_LENGTH), Color(0.88, 0.97, 1.0), 6.0, 0.95))
-	var ball := _beam_ball(float(KAME_RADIUS) * 1.7, Color(0.6, 0.9, 1.0), 5.0)
-	ball.position.z = -float(KAME_LENGTH)
-	node.add_child(ball)
-	node.scale = Vector3(0.15, 0.15, 0.02)
+	node.look_at(start + aim, up)
+	# 圆柱光柱：蓝色外晕(柔,alpha混合) + 白色亮核心
+	node.add_child(_beam_cyl(vis_r * 1.45, beam_len, Color(0.28, 0.64, 1.0), 1.3, 0.26, false))
+	node.add_child(_beam_cyl(vis_r * 0.6, beam_len, Color(0.92, 0.97, 1.0), 3.0, 0.92, true))
+	# 枪口余球 + 命中点光球（打到地面处）
+	node.add_child(_beam_ball(vis_r * 0.55, Color(0.75, 0.93, 1.0), 2.4))
+	var impact := _beam_ball(vis_r * 1.6, Color(0.60, 0.90, 1.0), 2.6)
+	impact.position.z = -beam_len
+	node.add_child(impact)
+	# 动画：沿长度射出 → 保持(配合运镜) → 收束消失
+	node.scale = Vector3(1.0, 1.0, 0.05)
 	var tw := node.create_tween()
-	tw.tween_property(node, "scale", Vector3.ONE, 0.16).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	tw.tween_interval(0.42)
-	tw.tween_property(node, "scale", Vector3(1.7, 1.7, 1.0), 0.28).set_ease(Tween.EASE_IN)
+	tw.tween_property(node, "scale", Vector3.ONE, 0.14).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(0.50)
+	tw.tween_property(node, "scale", Vector3(0.2, 0.2, 1.0), 0.28).set_ease(Tween.EASE_IN)
 	tw.tween_callback(node.queue_free)
 
-func _beam_box(radius: float, length: float, col: Color, energy: float, alpha: float) -> MeshInstance3D:
+# 圆柱光柱（round beam）。CylinderMesh 默认沿 Y，转 90° 对齐到本节点 -Z(瞄准方向)。
+func _beam_cyl(radius: float, length: float, col: Color, energy: float, alpha: float, additive: bool = true) -> MeshInstance3D:
+	var cm := CylinderMesh.new()
+	cm.top_radius = radius
+	cm.bottom_radius = radius
+	cm.height = length
+	cm.radial_segments = 16
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD if additive else BaseMaterial3D.BLEND_MODE_MIX
+	m.albedo_color = Color(col.r, col.g, col.b, alpha)
+	m.emission_enabled = true
+	m.emission = col
+	m.emission_energy_multiplier = energy
+	m.no_depth_test = true                  # 光柱画在地形之上，全程可见（它本就在气化这条路径）
+	cm.material = m
+	var mi := MeshInstance3D.new()
+	mi.mesh = cm
+	mi.rotation.x = PI / 2.0
+	mi.position = Vector3(0, 0, -length * 0.5)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
+
+func _beam_box(radius: float, length: float, col: Color, energy: float, alpha: float, additive: bool = true) -> MeshInstance3D:
 	var bm := BoxMesh.new()
 	bm.size = Vector3(radius * 2.0, radius * 2.0, length)
 	var m := StandardMaterial3D.new()
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD if additive else BaseMaterial3D.BLEND_MODE_MIX
 	m.albedo_color = Color(col.r, col.g, col.b, alpha)
 	m.emission_enabled = true
 	m.emission = col

@@ -1,6 +1,6 @@
 [gd_resource type="Theme" load_steps=10 format=3 uid="uid://b0vxc1theme01"]
 
-; VoxelCraft 统一主题 —— 给 Godot 默认控件套上与自绘深色面板一致的“商用质感”。
+; OurWorlds 统一主题 —— 给 Godot 默认控件套上与自绘深色面板一致的“商用质感”。
 ; 字阶（Label type variations）：H1 / H2 / Body / Caption
 ; 按钮四态：normal / hover / pressed / disabled（深底、圆角、细描边、hover 提亮）
 ; 面板：Panel / PanelContainer 深色半透明、圆角、描边
@@ -154,7 +154,7 @@ corner_radius_bottom_left = 6
 default_font_size = 15
 
 ; ---- Label 字阶 type variations ----
-; H1：界面主标题（如 VoxelCraft / 暂停标题）
+; H1：界面主标题（如 OurWorlds / 暂停标题）
 Label/font_sizes/H1 = 30
 Label/colors/H1 = Color(1.0, 0.98, 0.94, 0.98)
 ; H2：区块/分组标题

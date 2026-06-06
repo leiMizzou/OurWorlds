@@ -14,3 +14,16 @@ build/
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# Node / MCP 服务器（构建产物与本地配置，不入库）
+agent-bridge-mcp/node_modules/
+agent-bridge-mcp/dist/
+agent-bridge-mcp/config/
+*.tsbuildinfo
+
+# 每用户的 agent 运行期记忆
+agent_memory.json
+
+# Python 缓存
+__pycache__/
+*.pyc

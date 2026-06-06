@@ -7,25 +7,26 @@
 #
 # 用法：
 #   bash packaging/build_macos.sh                         # 仅导出 + 签名（产出已签名、未公证的 zip，可本机运行）
-#   NOTARY_PROFILE=voxelcraft-notary bash packaging/build_macos.sh   # 额外公证 + staple（需先存好凭证档，见下）
+#   NOTARY_PROFILE=ourworlds-notary bash packaging/build_macos.sh   # 额外公证 + staple（需先存好凭证档，见下）
 #
 # 一次性存公证凭证（二选一，存进钥匙串，之后复用）：
 #   App Store Connect API 密钥：
-#     xcrun notarytool store-credentials "voxelcraft-notary" \
+#     xcrun notarytool store-credentials "ourworlds-notary" \
 #       --key /path/AuthKey_XXXX.p8 --key-id <KEY_ID> --issuer <ISSUER_UUID>
 #   或 Apple ID + 专用密码：
-#     xcrun notarytool store-credentials "voxelcraft-notary" \
-#       --apple-id <APPLE_ID> --team-id 67KN33LJAQ --password <APP_SPECIFIC_PASSWORD>
+#     xcrun notarytool store-credentials "ourworlds-notary" \
+#       --apple-id <APPLE_ID> --team-id <TEAM_ID> --password <APP_SPECIFIC_PASSWORD>
 #
 # 可覆盖的环境变量：GODOT、SIGN_IDENTITY、NOTARY_PROFILE
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GODOT="${GODOT:-godot}"
-SIGN_IDENTITY="${SIGN_IDENTITY:-Developer ID Application: lei hua (67KN33LJAQ)}"
-ENTITLEMENTS="$HERE/packaging/voxelcraft.entitlements"
+# 用你自己的证书。脚本不内置任何签名身份；未设置则报错退出。
+SIGN_IDENTITY="${SIGN_IDENTITY:?请设置 SIGN_IDENTITY，例如：'Developer ID Application: Your Name (TEAMID)'}"
+ENTITLEMENTS="$HERE/packaging/ourworlds.entitlements"
 OUT_DIR="$HERE/build/macos"
-APP_NAME="VoxelCraft"
+APP_NAME="OurWorlds"
 APP="$OUT_DIR/stage/$APP_NAME.app"
 
 echo "==> [1/5] Godot 导出（未签名）…"

@@ -1,0 +1,43 @@
+// PROPOSED entry for ~/.openclaw/openclaw.json  →  agents.list[]
+//
+// REFERENCE ONLY — do not blind-paste over your config.
+// `openclaw agents add opc-ourworlds --workspace ~/.openclaw/agents/opc-ourworlds/workspace`
+// already creates a baseline entry; fold the fields below into it by hand
+// (model + heartbeat + skills), keeping whatever the CLI wrote.
+//
+// Model note: `openai/gpt-5.5` matches every other opc-* agent in this config and is wired to
+// the codex agent-runtime + your Codex OAuth profile via agents.defaults. If a brand-new agent
+// can't resolve it, fall back to `openai-codex/gpt-5.4` (the docs' canonical Codex form) and
+// re-check with `openclaw models list`.
+//
+// SECURITY: no tokens/keys here. Auth comes only from
+// `openclaw models auth login --provider openai-codex` (stored under ~/.openclaw, not in repo).
+
+{
+  id: "opc-ourworlds",
+  name: "OurWorlds",
+  workspace: "~/.openclaw/agents/opc-ourworlds/workspace",
+
+  // Codex GPT-5.5 via OpenClaw's native OAuth (inherits agents.defaults codex runtime).
+  model: "openai/gpt-5.5",
+
+  // Optional: list the MCP skill explicitly (usually globally available already).
+  skills: ["mcporter"],
+
+  identity: {
+    name: "OurWorlds",
+    emoji: "🧱",
+    theme: "Worldsmith spirit of OurWorlds — autonomous builder/explorer that restores landmarks.",
+  },
+
+  // Periodic observe->act tick. Heartbeat (not cron): context-aware + self-suppressing.
+  heartbeat: {
+    every: "3m",
+    activeHours: { start: "09:00", end: "23:00", timezone: "Asia/Shanghai" },
+    prompt: "Read HEARTBEAT.md and follow it. One tick = observe -> decide -> at most 6 high-level actions (goto/build/place/break) -> say what you did -> remember it. If the game is unreachable or returns 'world not ready', reply HEARTBEAT_OK.",
+  },
+
+  params: {
+    maxTokens: 8000,
+  },
+}
