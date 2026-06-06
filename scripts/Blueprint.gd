@@ -27,7 +27,11 @@ static func serialize(bp: Dictionary) -> String:
 	return JSON.stringify(bp)
 
 static func deserialize(s: String) -> Dictionary:
-	var parsed: Variant = JSON.parse_string(s)
+	# 用 JSON 实例 parse()（返回错误码、不向 stderr 打印）——坏数据安静返回空，不污染日志/自检。
+	var p := JSON.new()
+	if p.parse(s) != OK:
+		return {}
+	var parsed: Variant = p.data
 	if typeof(parsed) != TYPE_DICTIONARY:
 		return {}
 	return parsed
