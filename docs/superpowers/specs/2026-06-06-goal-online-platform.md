@@ -36,4 +36,5 @@
 ## 现状（2026-06-06）
 - ✅ M0（WorldData 数据核心）、M0.5（Web 烟测 + 字体）已完成并入 main。
 - ✅ **M1 完成**（分支 `m1-local-coop`，10 个任务全绿，52/52 自检）：headless 权威服务器 + 客户端，编辑/走动实时同步、增量持久、晚加入可见已有改动；端到端冒烟 `packaging/coop_smoke.sh` 通过。**仅剩"两个窗口里互看走动"的人工肉眼验收**（`packaging/run_coop_demo.sh`），我无头看不到画面。
-- ⬜ M2、M2.5、M3、M4、M5、M6、Mac App：M1 已打通，按此顺序推进。
+- 🔄 **M2 进行中**：**网页客户端联机已实测通过**——浏览器里 Godot WASM 启动+渲染（标题/3D 地形/中文字体都正常），经 WebSocket 连上权威服务器并入场（控制台确认：连接中→已连上服务器→脚下区域就绪 2.7s；多线程 crossOriginIsolated via COOP/COEP）。`?connect=ws://…` URL 参数自动连服已落地（`Main._connect_url`）。已知小瑕：网页端有 Emscripten "blocking on main thread" 警告（非致命，连接成功；M5 性能再优化）。待办：网页"加入"菜单走 ?connect 跳转、AI agent 作为联机玩家、坐标瞬移/分享建造。
+- ⬜ M3（Cloudflare Tunnel）、M4（账号 + 社交 OAuth）、M5、M6、Mac App：依次推进；外部账号步骤（CF/OAuth/Apple）到点交给你。
