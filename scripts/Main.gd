@@ -329,6 +329,9 @@ func _setup_agent_bridge() -> void:
 	ai_avatar.global_position = player.global_position + Vector3(3, 0, 0)
 	bridge.avatar = ai_avatar
 	add_child(bridge)
+	# agent-client：联机层上报 agent 小人的位置（而非闲置玩家），服务器据此校验编辑、别人也看见 agent 走动。
+	if net_manager != null and net_manager.has_method("is_client") and net_manager.is_client():
+		net_manager.report_node = ai_avatar
 
 func _detect_net_mode() -> int:
 	if OS.has_environment("OW_SERVER"):

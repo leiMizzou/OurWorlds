@@ -30,6 +30,8 @@ var _peers := {}                   # peer_id:int -> {eid, name, pos:Vector3, yaw
 var _eid_counter := 0
 var _self_eid := ""                # 本端自己的 eid（CLIENT/HOST）；快照里跳过它
 var _avatars := {}                 # eid -> RemoteAvatar 节点（CLIENT）
+var report_node: Node3D = null     # 客户端上报哪个节点的位置：默认玩家；agent-client 设成 agent 小人，
+                                   # 这样服务器按 agent 实际位置校验编辑、别人也看见 agent 走动
 
 func set_authority_data(data: WorldData, world_seed: int, spawn: Vector3) -> void:
 	_data = data
@@ -349,5 +351,6 @@ func _process(delta: float) -> void:
 		_self_sync_accum += delta
 		if _self_sync_accum >= 1.0 / SNAPSHOT_HZ:
 			_self_sync_accum = 0.0
-			if player != null:
-				_rpc_update_self.rpc_id(1, player.global_position.x, player.global_position.y, player.global_position.z, player.rotation.y)
+			var rn: Node3D = report_node if report_node != null else player
+			if rn != null:
+				_rpc_update_self.rpc_id(1, rn.global_position.x, rn.global_position.y, rn.global_position.z, rn.rotation.y)
