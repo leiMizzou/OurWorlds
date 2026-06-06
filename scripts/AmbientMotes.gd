@@ -122,7 +122,7 @@ func _region_tint(label: String) -> Color:
 		return Color(0.54, 0.94, 0.82)
 	if label == "沙岸":
 		return Color(1.0, 0.78, 0.42)
-	if label == "雪峰":
+	if label == "雪峰" or label == "雪山":
 		return Color(0.78, 0.92, 1.0)
 	if label == "岩岭" or label == "玄武岩岭":
 		return Color(0.66, 0.78, 0.86)
@@ -130,17 +130,43 @@ func _region_tint(label: String) -> Color:
 		return Color(0.58, 0.92, 0.52)
 	if label == "风草原":
 		return Color(0.86, 1.0, 0.58)
+	# ---- 主题岛扇区 ----
+	if label == "沙漠":
+		return Color(1.0, 0.82, 0.36)           # warm gold sand dust
+	if label == "热带海岸":
+		return Color(0.38, 0.96, 0.72)           # tropical turquoise
+	if label == "村庄":
+		return Color(0.92, 0.88, 0.62)           # cozy warm straw
+	if label == "中央广场":
+		return Color(1.0, 0.92, 0.72)            # golden plaza glow
+	if label == "霓虹城":
+		return Color(0.28, 0.92, 1.0)            # electric cyan
+	if label == "天文台":
+		return Color(0.72, 0.76, 1.0)            # cool starlight blue
+	if label == "农田":
+		return Color(0.72, 0.96, 0.48)           # fresh green pollen
+	if label == "海湾":
+		return Color(0.46, 0.82, 0.96)           # coastal mist blue
 	return Color(1.0, 0.86, 0.44)
 
 func _region_density(label: String) -> float:
 	if label == "湿地" or label == "浅水湾":
 		return 1.16
-	if label == "雪峰":
+	if label == "雪峰" or label == "雪山":
 		return 0.82
 	if label == "岩岭" or label == "玄武岩岭":
 		return 0.74
 	if _is_forest_region(label):
 		return 1.08
+	# ---- 主题岛扇区 ----
+	if label == "霓虹城":
+		return 1.35                               # dense digital sparks
+	if label == "热带海岸" or label == "海湾":
+		return 1.18                               # humid mist
+	if label == "沙漠":
+		return 0.72                               # sparse desert dust
+	if label == "天文台":
+		return 0.88                               # crisp mountain air
 	return 1.0
 
 func _is_forest_region(label: String) -> bool:

@@ -344,4 +344,4 @@ func _effective_label() -> String:
 	return _label
 
 func _is_cold_region() -> bool:
-	return _region_label == "雪峰"
+	return _region_label == "雪峰" or _region_label == "雪山"

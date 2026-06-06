@@ -13,6 +13,8 @@ const SnowCabin = preload("res://scripts/structures/SnowCabin.gd")
 const Village = preload("res://scripts/structures/Village.gd")
 const PlazaMonument = preload("res://scripts/structures/PlazaMonument.gd")
 const RailBridgeNet = preload("res://scripts/structures/RailBridgeNet.gd")
+const IslandDecorator = preload("res://scripts/structures/IslandDecorator.gd")
+const Waterfall = preload("res://scripts/structures/Waterfall.gd")
 
 const ISLAND_SIZE := 512           # 岛边长（格）
 const HALF := 256                  # = ISLAND_SIZE / 2
@@ -141,6 +143,17 @@ func generate(chunk: Chunk) -> void:
 			THEME_BUILDER[cell_theme].stamp(chunk, null, anchor)
 	# 3) 铁轨连接网
 	RailBridgeNet.stamp(chunk, null, Vector3i(0, BASE_Y, 0))
+	# 4) 散布装饰（植被、灯柱、细节）
+	for cell in range(SECTORS * SECTORS):
+		var dec_theme: int = CELL_THEME[cell]
+		var dec_anchor := sector_anchor(cell)
+		IslandDecorator.stamp(chunk, null, dec_anchor, dec_theme, _seed)
+	# 5) 瀑布（热带→海湾交界处）
+	var tropical_anchor := sector_anchor(2)   # TROPICAL = cell 2（北排东）
+	var bay_anchor := sector_anchor(8)        # BAY = cell 8（南排东）
+	var wf_x: int = (tropical_anchor.x + bay_anchor.x) / 2
+	var wf_z: int = (tropical_anchor.z + bay_anchor.z) / 2
+	Waterfall.stamp(chunk, null, Vector3i(wf_x, BASE_Y, wf_z))
 
 func region_label(wx: int, wz: int) -> String:
 	if not inside(wx, wz):
