@@ -108,6 +108,19 @@ var _restoration_marker_mode := "repair"
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	# 字体回退链：主字体是打包的 NotoSansSC 子集（覆盖 UI 静态文案，Web 也能显示中文）。
+	# 再挂 ① 系统字体：原生平台补全任意 CJK（玩家/agent 动态输入的生僻字）+ 彩色 emoji；
+	#       Web 无系统字体会自动跳过。② emoji 子集：让 🤖🧑🧱 在 Web 上也能显示（黑白）。
+	var _ui_font := load("res://ui/fonts/NotoSansSC-OurWorlds.ttf") as FontFile
+	if _ui_font != null:
+		var _fallbacks: Array[Font] = []
+		var _sys := SystemFont.new()
+		_sys.font_names = PackedStringArray(["PingFang SC", "Heiti SC", "Noto Sans CJK SC", "Microsoft YaHei", "sans-serif"])
+		_fallbacks.append(_sys)
+		var _emoji_font := load("res://ui/fonts/NotoEmoji-OurWorlds.ttf") as FontFile
+		if _emoji_font != null:
+			_fallbacks.append(_emoji_font)
+		_ui_font.fallbacks = _fallbacks
 	_settings = GameSettings.load_settings()
 	_graphics_quality = _sanitize_graphics_quality(str(_settings.get("graphics_quality", "balanced")))
 	lib = BlockLibrary.new()

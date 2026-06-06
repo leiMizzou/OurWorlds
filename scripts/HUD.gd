@@ -628,7 +628,7 @@ func _refresh_status_bar(p: Vector3) -> void:
 	segments.append("◆ %s" % _save_status)
 	var home := _home_status(p).strip_edges()
 	if home != "":
-		segments.append("⮌ %s" % home)
+		segments.append("⊙ %s" % home)
 	if player.has_method("brush_label") and player.brush_label() != "1x1":
 		segments.append("▤ 画笔 %s" % player.brush_label())
 	if player.has_method("build_template_id") and player.build_template_id() != "off":
@@ -637,9 +637,9 @@ func _refresh_status_bar(p: Vector3) -> void:
 			orientation = " " + player.build_template_orientation_label()
 		segments.append("▣ 模板 %s%s" % [player.build_template_label(), orientation])
 	if _discovery_count > 0:
-		segments.append("⌖ 遗迹 %d" % _discovery_count)
+		segments.append("◎ 遗迹 %d" % _discovery_count)
 	elif _nearby_landmark_distance >= 0:
-		segments.append("⌖ 附近遗迹 %dm %s" % [_nearby_landmark_distance, _nearby_landmark_direction])
+		segments.append("◎ 附近遗迹 %dm %s" % [_nearby_landmark_distance, _nearby_landmark_direction])
 	_status_label.text = "   ·   ".join(segments)
 	# 主次分层：有未保存改动时整条略提亮强调，已保存时回到沉静主色。
 	var has_unsaved := _save_status == "有改动"
