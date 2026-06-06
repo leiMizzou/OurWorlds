@@ -28,6 +28,7 @@ const ChatPanel = preload("res://scripts/ChatPanel.gd")
 const NetworkManager = preload("res://scripts/NetworkManager.gd")
 const RemoteAvatar = preload("res://scripts/RemoteAvatar.gd")
 const WorldData = preload("res://scripts/WorldData.gd")
+const NetMenu = preload("res://scripts/NetMenu.gd")
 
 const DAY_LEN := 180.0   # 一个昼夜 180 秒
 const AUTO_SAVE_INTERVAL := 18.0
@@ -59,6 +60,7 @@ var world_map: WorldMap
 var photo_overlay: PhotoOverlay
 var chat_hub
 var chat_panel: ChatPanel
+var net_menu: NetMenu
 var _net_mode: int = NetworkManager.Mode.OFFLINE
 var net_manager: NetworkManager
 
@@ -301,6 +303,12 @@ func _enter_world(seed_value: int, spawn_override) -> void:
 	chat_panel = ChatPanel.new()
 	add_child(chat_panel)
 	chat_panel.setup(chat_hub, "player")
+	net_menu = NetMenu.new()
+	net_menu.name = "NetMenu"
+	add_child(net_menu)
+	net_menu.setup()
+	net_menu.host_requested.connect(_on_net_host_requested)
+	net_menu.join_requested.connect(_on_net_join_requested)
 	_setup_agent_bridge()
 
 # 代理桥（仅在设置了 OW_AGENT_PORT 时启用）：让外部 LLM 经 TCP/NDJSON 感知并操作游戏。
@@ -505,6 +513,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			set_chat_active(false)
 			get_viewport().set_input_as_handled()
 		return
+	if net_menu != null and net_menu.is_open():
+		if event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_ESCAPE or event.keycode == KEY_N):
+			net_menu.close()
+			get_viewport().set_input_as_handled()
+		return
 	if _title_active:
 		if event is InputEventKey and event.pressed and not event.echo:
 			if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
@@ -534,6 +547,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_J:
 		set_journal_active(true)
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_N:
+		if net_menu != null:
+			net_menu.toggle()
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_M:
@@ -652,6 +670,18 @@ func _on_pause_resume_requested() -> void:
 		_close_title_settings()
 	else:
 		set_game_paused(false)
+
+func _on_net_host_requested() -> void:
+	# 把当前单机世界就地变成 Host（权威服务器 + 本地游玩）。仅在单机态允许。
+	if _net_mode != NetworkManager.Mode.OFFLINE:
+		return
+	_net_mode = NetworkManager.Mode.HOST
+	_start_host_after_enter()
+
+func _on_net_join_requested(url: String) -> void:
+	# 以客户端身份加入：设连接地址并重载场景，由 _ready 走 CLIENT 分支。
+	OS.set_environment("OW_CONNECT", url)
+	get_tree().reload_current_scene()
 
 func _return_to_title_from_pause() -> void:
 	if _title_active:
