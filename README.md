@@ -88,6 +88,27 @@ bash run_with_agent.sh
 godot --path .
 ```
 
+## 🌐 联机（本地双人 / 局域网，M1）
+
+权威服务器（headless Godot）+ 客户端，方块编辑与小人位置实时同步；单机完全不受影响。
+
+```bash
+# 一台机演示：1 个无头权威服务器 + 2 个客户端窗口（人工确认互见/互改）
+bash packaging/run_coop_demo.sh
+# 端到端冒烟（无头自动化，可进 CI）：连上 → 入场 → 建出世界
+bash packaging/coop_smoke.sh
+```
+
+也可用环境变量手动起：
+
+```bash
+OW_SERVER=1 OW_PORT=8971 godot --headless --path .    # 纯权威服务器（无渲染）
+OW_CONNECT=ws://127.0.0.1:8971 godot --path .          # 客户端加入
+OW_HOST=1 godot --path .                               # 开服并本地同时游玩(Host)
+```
+
+游戏内按 **N** 打开「联机」菜单（开服并游玩 / 加入地址）。范围：本机 / 局域网，暂无账号与云存档（公网部署 + 社交登录见路线图）。
+
 ## ✅ 自检
 
 ```bash
@@ -120,7 +141,9 @@ SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" bash packaging/buil
 | World | `scripts/World.gd` | 区块流式加载/卸载、批量编辑、存档、后台造网格调度 |
 | Player / HUD | `scripts/Player.gd` · `HUD.gd` | 第一人称控制 / 准星 + 快捷栏 + 引导 + 状态栏 + agent 角标 |
 | AgentBridge | `scripts/AgentBridge.gd` | 本地 TCP/NDJSON 桥，把 12 个工具映射到游戏方法，供 LLM agent 调用 |
-| Main | `scripts/Main.gd` | 启动编排：环境/天空/太阳/昼夜 + 接好各系统 + agent 桥 |
+| Main | `scripts/Main.gd` | 启动编排：环境/天空/太阳/昼夜 + 接好各系统 + agent 桥 + 联机启动模式(server/host/client) |
+| NetworkManager | `scripts/NetworkManager.gd` | 联机权威核心（校验/写入/握手/玩家快照，纯逻辑可无头单测）+ WebSocket/RPC 实时层 |
+| RemoteAvatar | `scripts/RemoteAvatar.gd` | 联机里"别人"的身体：名牌 + 朝网络目标平滑插值（非瞬移） |
 
 更多设计见 [`docs/DESIGN.md`](docs/DESIGN.md)。
 
@@ -129,8 +152,9 @@ SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" bash packaging/buil
 - ✅ 宏大可玩切片 + 渲染地基/性能 + 内容/UX 打磨（详见 [`docs/DESIGN.md`](docs/DESIGN.md)）
 - ✅ AI agent 桥（TCP/NDJSON）+ MCP 服务器 + OpenClaw 接入 + 游戏内连接角标
 - ✅ macOS 打包发布管道（universal 导出 + Developer ID 签名 + 硬化运行时；公证待自备 Apple 凭证）
-- 🧪 全套 headless 逻辑自检：**43/43 通过**
-- ⏭ 路线（欢迎贡献）：在线多人、数据驱动 Mod/材质包、生存玩法、Windows/Linux 签名、i18n
+- ✅ 本地双人联机（M1）：headless 权威服务器 + 客户端，挖/放与走动实时同步（`packaging/run_coop_demo.sh`）
+- 🧪 全套 headless 逻辑自检：**52/52 通过**
+- ⏭ 路线（欢迎贡献）：联机上云（Cloudflare Tunnel + 专属域名）、浏览器客户端、账号 + 社交登录（Google/GitHub/Twitter）、AI agent 作为联机玩家、坐标瞬移 / 分享建造、Mac App
 
 ## 📄 许可
 

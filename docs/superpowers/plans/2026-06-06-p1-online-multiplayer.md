@@ -35,7 +35,7 @@ Much of the spec's **M0 data layer already exists** inside `scripts/World.gd` (a
 |---|---|---|---|
 | **M0** (this plan) | Extract `WorldData` (pure data+gen+delta, no nodes) from `World`; add per-chunk `revision`; `apply_edit_local` data path; SP unchanged | 47/47 green; new `test_world_data.gd`; WorldData usable with **no SceneTree** | ~1 week |
 | **M0.5** | Web/WASM single-player smoke: export, COOP/COEP threads, view distance, FPS | Playable in browser; min view dist + FPS known | ~3–5 days |
-| **M1** | Local authoritative co-op: headless server (`WebSocketMultiplayerPeer`) + 2 clients; avatars visible; edits sync; in-memory deltas persist within session; no accounts/web/cloud | 1 server + 2 clients locally see each other move + edit; leave/return keeps edits | ~2–3 weeks |
+| **M1** ✅ done | Local authoritative co-op: headless server (`WebSocketMultiplayerPeer`) + 2 clients; avatars visible; edits sync; in-memory deltas persist within session; no accounts/web/cloud | 1 server + 2 clients locally see each other move + edit; leave/return keeps edits | ~2–3 weeks |
 | **M2** | Web client connects to LAN/local Godot server over wss | Browser client plays stably | ~1 week |
 | **M3** | Server on a VPS; Caddy wss/TLS; optional local-file save | Public address connects; world survives restart | ~1 week |
 | **M4** | Accounts + cloud save (Nakama): login, entry ticket, chunk-delta & player-state to DB, autosave, reconnect-resume | Log in on another device → same world, builds intact | ~3–4 weeks |
