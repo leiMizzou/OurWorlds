@@ -10,8 +10,8 @@ const HALF := 256                  # = ISLAND_SIZE / 2
 const SECTORS := 3                 # 3×3 扇区
 const BASE_Y := 40                 # 岛面基准高度
 const FLOOR_Y := 24                # 岛体底壳；其下为空气（浮空）
-const WATER_Y := 38                # 水面（含水扇区）
-const EDGE := 10                   # 边缘崖壁余量带
+const WATER_Y := 38                # 水面高度（含水扇区；Task 3 地形用）
+const EDGE := 10                   # 边缘崖壁渐变带宽度（Task 3 地形用）
 
 enum IslandTheme { SNOW, DESERT, TROPICAL, VILLAGE, PLAZA, CYBER, OBSERVATORY, FARM, BAY }
 const CELL_THEME := [
@@ -25,7 +25,7 @@ func _init(world_seed: int = 1337) -> void:
 	_seed = world_seed
 
 func inside(wx: int, wz: int) -> bool:
-	return absi(wx) <= HALF and absi(wz) <= HALF
+	return wx >= -HALF and wx < HALF and wz >= -HALF and wz < HALF
 
 # (wx,wz) -> 扇区索引 0..8（row*3+col；col 按 x 西→东，row 按 z 北→南）
 func sector_cell(wx: int, wz: int) -> int:
@@ -41,12 +41,6 @@ func surface_height(wx: int, wz: int) -> int:
 	if not inside(wx, wz):
 		return 0
 	return BASE_Y
-
-# 仅测试辅助：取某列地表方块（避免测试里手算 index）。
-func get_top_block_for_test(wx: int, wz: int) -> int:
-	var ch := Chunk.new(floori(float(wx) / Chunk.SX), floori(float(wz) / Chunk.SZ))
-	generate(ch)
-	return ch.get_block(posmod(wx, Chunk.SX), surface_height(wx, wz), posmod(wz, Chunk.SZ))
 
 func generate(chunk: Chunk) -> void:
 	for lx in range(Chunk.SX):

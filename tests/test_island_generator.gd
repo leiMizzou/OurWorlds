@@ -20,11 +20,12 @@ func _initialize() -> void:
 	# 中心（原点扇区）地表为实体方块，且在合理高度
 	var sy := g.surface_height(4, 4)
 	check(sy > 0 and sy < Chunk.SY, "中心 surface_height 在 (0,SY)")
-	check(g.get_top_block_for_test(4, 4) != 0, "中心地表非空气")
+	check(top_block(g, 4, 4) != 0, "中心地表非空气")
 
 	# 界外（远超半径）整列空气
 	var far := IslandGenerator.HALF + 64
-	var cfar := Chunk.new(g_chunk_x(far), g_chunk_x(far)); g.generate(cfar)
+	var fc := chunk_coord(far)
+	var cfar := Chunk.new(fc, fc); g.generate(cfar)
 	var any_solid := false
 	for y in range(Chunk.SY):
 		if cfar.get_block(far % Chunk.SX, y, far % Chunk.SX) != 0:
@@ -44,5 +45,11 @@ func _initialize() -> void:
 	quit(0 if failed == 0 else 1)
 
 # 把世界坐标映射到所在区块的区块坐标（仅测试辅助）
-func g_chunk_x(w: int) -> int:
+func chunk_coord(w: int) -> int:
 	return floori(float(w) / Chunk.SX)
+
+# 取某列地表方块（测试本地辅助）
+func top_block(g, wx: int, wz: int) -> int:
+	var ch := Chunk.new(floori(float(wx) / Chunk.SX), floori(float(wz) / Chunk.SZ))
+	g.generate(ch)
+	return ch.get_block(posmod(wx, Chunk.SX), g.surface_height(wx, wz), posmod(wz, Chunk.SZ))
