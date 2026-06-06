@@ -1,0 +1,29 @@
+# OurWorlds — Cloudflare Tunnel 配置模板（M3 公网部署）
+# 把它复制成 ~/.cloudflared/config.yml（或用 --config 指向它），填好 <占位符> 后再 `cloudflared tunnel run`。
+#
+# 思路：一条隧道，两个二级域名入口——
+#   1) 网页客户端（静态 WASM 站点，serve_web.py 在 :8060，带 COOP/COEP 头给多线程用）
+#   2) 游戏 WebSocket 权威服务器（Godot headless 在 :8971；Cloudflare 自动代理 WebSocket 升级 + 边缘 TLS）
+# 玩家拿到的入口链接形如：
+#   https://ourworlds.<你的域名>/?connect=wss://play.ourworlds.<你的域名>
+# （?connect= 由 Main._connect_url() 解析，网页端据此自动连服，无需在画布里点菜单。）
+
+tunnel: <TUNNEL_ID>                                  # `cloudflared tunnel create ourworlds` 后得到
+credentials-file: /Users/<你>/.cloudflared/<TUNNEL_ID>.json
+
+# 可选：WebSocket 长连接保活，避免空闲被断
+originRequest:
+  noTLSVerify: false
+  connectTimeout: 30s
+
+ingress:
+  # —— 网页客户端（https，Cloudflare 边缘自动签证书）——
+  - hostname: ourworlds.<你的域名>
+    service: http://localhost:8060
+
+  # —— 游戏权威服务器（WebSocket；Cloudflare 在 http(s) 服务上透明支持 WS 升级 → 客户端用 wss://）——
+  - hostname: play.ourworlds.<你的域名>
+    service: http://localhost:8971
+
+  # —— 兜底 ——
+  - service: http_status:404
