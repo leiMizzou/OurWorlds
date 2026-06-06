@@ -366,14 +366,30 @@ func _detect_net_mode() -> int:
 func _connect_url() -> String:
 	if OS.has_feature("web"):
 		var search := str(JavaScriptBridge.eval("window.location.search", true))
-		var u := _query_param(search, "connect")
+		var origin := str(JavaScriptBridge.eval("window.location.origin", true))
+		var u := _resolve_web_connect_url(search, origin)
 		if u != "":
 			return u
 	if OS.has_environment("OW_CONNECT"):
 		return OS.get_environment("OW_CONNECT")
 	return ""
 
-func _query_param(search: String, key: String) -> String:
+# 网页端要连哪个服务器（纯逻辑，static 便于无头测试）：
+#   1) 显式 ?connect= 优先；2) 否则按页面来源自动推导同源 wss://<host>/ws（单二级域名 + /ws 路径路由）；
+#   3) 本地开发(localhost/127.0.0.1)不自动连 → 留空=单机。这样裸链接 https://play.ourworlds.app 也能一键进服。
+static func _resolve_web_connect_url(search: String, origin: String) -> String:
+	var explicit := _query_param(search, "connect")
+	if explicit != "":
+		return explicit
+	if origin == "" or origin.contains("localhost") or origin.contains("127.0.0.1"):
+		return ""
+	if origin.begins_with("https://"):
+		return "wss://" + origin.substr(8) + "/ws"
+	if origin.begins_with("http://"):
+		return "ws://" + origin.substr(7) + "/ws"
+	return ""
+
+static func _query_param(search: String, key: String) -> String:
 	# search 形如 "?connect=ws%3A%2F%2F127.0.0.1%3A8971&x=1"
 	for pair in search.trim_prefix("?").split("&", false):
 		var kv: PackedStringArray = pair.split("=", true, 1)
