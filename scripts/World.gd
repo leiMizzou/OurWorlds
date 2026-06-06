@@ -41,6 +41,7 @@ var track_target: Node3D
 var save_path := ""
 var cover_path := ""
 
+var net = null     # NetworkManager（Main 注入）。null=单机。CLIENT 转发编辑、不本地应用；HOST/OFFLINE 本地应用。
 var _data: WorldData           # 可无头数据核心：拥有 seed/生成器/区块数据/增量/revision
 var _world_seed := 1337
 var _chunks := {}              # 指向 _data.chunks() 的同一引用 —— 复用现有所有读取
@@ -103,6 +104,9 @@ func get_block(wx: int, wy: int, wz: int) -> int:
 	return _data.get_block(wx, wy, wz)
 
 func request_edit(wx: int, wy: int, wz: int, id: int) -> bool:
+	if net != null and net.has_method("is_client") and net.is_client():
+		net.submit_edit(wx, wy, wz, id)
+		return true                       # 乐观返回；实际生效等服务器广播 apply_remote_edit
 	if wy < 0 or wy >= Chunk.SY:
 		return false
 	var before := get_block(wx, wy, wz)
@@ -113,9 +117,18 @@ func request_edit(wx: int, wy: int, wz: int, id: int) -> bool:
 		return false
 	flush_remesh(dirty)
 	_push_history(Vector3i(wx, wy, wz), before, id)
+	if net != null and net.has_method("broadcast_edit"):
+		net.broadcast_edit(wx, wy, wz, id)   # HOST：本地应用后广播给客户端
 	return true
 
 func request_edits(cells: Array, id: int) -> int:
+	if net != null and net.has_method("is_client") and net.is_client():
+		var n := 0
+		for raw in cells:
+			var pos: Vector3i = raw
+			net.submit_edit(pos.x, pos.y, pos.z, id)
+			n += 1
+		return n
 	var entries := []
 	var seen := {}
 	var dirty := {}
@@ -136,9 +149,21 @@ func request_edits(cells: Array, id: int) -> int:
 		return 0
 	flush_remesh(dirty)           # 批量：所有数据写完后，每个脏区块只重建一次
 	_push_history_entries(entries)
+	if net != null and net.has_method("broadcast_edit"):
+		for e in entries:
+			var p: Vector3i = e["pos"]
+			net.broadcast_edit(p.x, p.y, p.z, int(e["after"]))
 	return entries.size()
 
 func request_block_edits(edits: Array) -> int:
+	if net != null and net.has_method("is_client") and net.is_client():
+		var n := 0
+		for raw in edits:
+			var edit: Dictionary = raw
+			var pos: Vector3i = edit.get("pos", Vector3i.ZERO)
+			net.submit_edit(pos.x, pos.y, pos.z, int(edit.get("id", BlockLibrary.AIR)))
+			n += 1
+		return n
 	var entries := []
 	var seen := {}
 	var dirty := {}
@@ -161,7 +186,30 @@ func request_block_edits(edits: Array) -> int:
 		return 0
 	flush_remesh(dirty)           # 批量：所有数据写完后，每个脏区块只重建一次
 	_push_history_entries(entries)
+	if net != null and net.has_method("broadcast_edit"):
+		for e in entries:
+			var p: Vector3i = e["pos"]
+			net.broadcast_edit(p.x, p.y, p.z, int(e["after"]))
 	return entries.size()
+
+# 客户端：套用服务器广播的一条编辑（只写数据 + 重建网格；不记历史、不再转发）。
+func apply_remote_edit(wx: int, wy: int, wz: int, id: int) -> bool:
+	if wy < 0 or wy >= Chunk.SY:
+		return false
+	var dirty := {}
+	if not set_block_data(wx, wy, wz, id, dirty):
+		return false
+	flush_remesh(dirty)
+	return true
+
+# 客户端：入场时一次性载入服务器下发的全部增量，并重建已加载区块。
+func load_deltas_from_net(deltas: Dictionary) -> void:
+	_data.load_deltas(deltas)
+	_chunks = _data.chunks()      # load_deltas 清了内部 chunk 缓存；重新取共享引用
+	var dirty := {}
+	for cc in _chunks.keys():
+		dirty[cc] = true
+	flush_remesh(dirty)
 
 # 单格编辑（公共 API）：写数据 + 重建受影响区块（单块及跨界邻块）。
 func set_block(wx: int, wy: int, wz: int, id: int) -> bool:
