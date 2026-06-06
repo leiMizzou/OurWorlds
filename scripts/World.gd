@@ -44,6 +44,7 @@ var cover_path := ""
 var net = null     # NetworkManager（Main 注入）。null=单机。CLIENT 转发编辑、不本地应用；HOST/OFFLINE 本地应用。
 var _data: WorldData           # 可无头数据核心：拥有 seed/生成器/区块数据/增量/revision
 var _world_seed := 1337
+var _world_kind := "infinite"
 var _chunks := {}              # 指向 _data.chunks() 的同一引用 —— 复用现有所有读取
 var _delta_dirty := false
 var _discoveries := {}          # "x,y,z" -> true，已发现的世界地标
@@ -70,17 +71,21 @@ var _light_dirty := {}       # Vector2i -> true，该区块发光方块有增删
 var _solid; var _opaque; var _transp; var _water
 var _ttop; var _tside; var _tbot; var _matbucket
 
-func setup(block_lib: BlockLibrary, world_seed: int = 1337, save_file: String = "") -> void:
+func setup(block_lib: BlockLibrary, world_seed: int = 1337, save_file: String = "", kind: String = "infinite") -> void:
 	lib = block_lib
 	_world_seed = world_seed
+	_world_kind = kind
 	save_path = save_file
-	_data = WorldData.new(world_seed)
+	_data = WorldData.new(world_seed, kind)
 	_chunks = _data.chunks()      # 同一字典引用：World 的读取/卸载继续用 _chunks，写入走 _data
 	_solid = lib.solid_lut; _opaque = lib.opaque_lut; _transp = lib.transp_lut; _water = lib.water_lut
 	_ttop = lib.tile_top_lut; _tside = lib.tile_side_lut; _tbot = lib.tile_bot_lut; _matbucket = lib.mat_bucket_lut
 	_max_inflight = maxi(4, OS.get_processor_count() - 1)
 	if save_path != "":
 		load_world()
+
+func world_kind() -> String:
+	return _world_kind
 
 func set_view_radius(value: int) -> void:
 	view_radius = clampi(value, 2, 6)
@@ -582,6 +587,7 @@ func save_world(force: bool = false) -> bool:
 	var data := {
 		"version": SAVE_VERSION,
 		"seed": _world_seed,
+		"kind": _world_kind,
 		"updated_at": Time.get_unix_time_from_system(),
 		"cover_path": cover_path,
 		"edit_count": edit_count(),
