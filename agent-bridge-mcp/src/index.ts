@@ -491,6 +491,46 @@ server.registerTool(
   async (args) => forward("build", stripUndefined(args)),
 );
 
+// 4.7b capture_build / paste_build — 分享建造（蓝图）
+server.registerTool(
+  "capture_build",
+  {
+    title: "Capture build",
+    description:
+      "Capture a cuboid region's non-air blocks into a named, shareable blueprint file " +
+      "(under user://blueprints/<name>.json). Use it to save a structure so it can be " +
+      "pasted/showcased elsewhere. Give the two opposite corners.",
+    inputSchema: {
+      name: z.string().describe("Blueprint name (valid filename, no path separators)."),
+      x1: z.number().int().describe("Corner A X."),
+      y1: z.number().int().describe("Corner A Y."),
+      z1: z.number().int().describe("Corner A Z."),
+      x2: z.number().int().describe("Corner B X."),
+      y2: z.number().int().describe("Corner B Y."),
+      z2: z.number().int().describe("Corner B Z."),
+    },
+  },
+  async (args) => forward("capture_build", args),
+);
+
+server.registerTool(
+  "paste_build",
+  {
+    title: "Paste build",
+    description:
+      "Paste a previously captured blueprint at an anchor cell (the blueprint's local origin " +
+      "maps to the anchor). Goes through the normal edit path, so in multiplayer the pasted " +
+      "build is broadcast to everyone. Use to showcase/share a build in the world.",
+    inputSchema: {
+      name: z.string().describe("Blueprint name to paste (must already exist)."),
+      x: z.number().int().describe("Anchor X."),
+      y: z.number().int().describe("Anchor Y."),
+      z: z.number().int().describe("Anchor Z."),
+    },
+  },
+  async (args) => forward("paste_build", args),
+);
+
 // 4.8 get_block
 server.registerTool(
   "get_block",

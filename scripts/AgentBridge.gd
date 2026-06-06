@@ -12,6 +12,8 @@ extends Node
 
 const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
 const Chunk = preload("res://scripts/Chunk.gd")
+const Blueprint = preload("res://scripts/Blueprint.gd")
+const BLUEPRINT_DIR := "user://blueprints"
 
 const DEFAULT_PORT := 8970
 const MAX_CELLS := 4096
@@ -214,6 +216,10 @@ func _handle(tool: String, args: Dictionary) -> Dictionary:
 			return _tool_break(args)
 		"build":
 			return _tool_build(args)
+		"capture_build":
+			return _tool_capture_build(args)
+		"paste_build":
+			return _tool_paste_build(args)
 		"get_block":
 			return _tool_get_block(args)
 		"say":
@@ -471,6 +477,58 @@ func _tool_build(args: Dictionary) -> Dictionary:
 		avatar.note_build()                  # 小人闪一下，表示"它在这儿盖的"
 	_record_action("build", "%s @ (%d,%d,%d)" % [template, x, y, z], true)
 	return {"template": template, "anchor": [x, y, z], "rotation": rotation, "changed": changed}
+
+# 捕获一块长方体区域存成蓝图文件（可分享/异地重现）：args name + x1,y1,z1, x2,y2,z2
+func _tool_capture_build(args: Dictionary) -> Dictionary:
+	if not _ready_for_acting():
+		return _err("world not ready")
+	var name := str(args.get("name", "")).strip_edges()
+	if name == "" or not name.is_valid_filename():
+		return _err("bad args: name (required, 须为合法文件名)")
+	for k in ["x1", "y1", "z1", "x2", "y2", "z2"]:
+		if not args.has(k):
+			return _err("bad args: x1/y1/z1/x2/y2/z2 (required)")
+	var a := Vector3i(int(args["x1"]), int(args["y1"]), int(args["z1"]))
+	var b := Vector3i(int(args["x2"]), int(args["y2"]), int(args["z2"]))
+	var bp: Dictionary = Blueprint.capture(world, a, b)
+	var n_blocks := int((bp.get("blocks", {}) as Dictionary).size())
+	if n_blocks > MAX_CELLS:
+		return _err("too big: %d > %d 块" % [n_blocks, MAX_CELLS])
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(BLUEPRINT_DIR))
+	var path := "%s/%s.json" % [BLUEPRINT_DIR, name]
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		return _err("write failed: " + path)
+	f.store_string(Blueprint.serialize(bp))
+	f.close()
+	_record_action("capture_build", "%s (%d 块)" % [name, n_blocks], true)
+	return {"name": name, "size": bp.get("size", []), "blocks": n_blocks}
+
+# 把蓝图贴到锚点（走正常编辑链路，联机会广播）：args name + x,y,z
+func _tool_paste_build(args: Dictionary) -> Dictionary:
+	if not _ready_for_acting():
+		return _err("world not ready")
+	var name := str(args.get("name", "")).strip_edges()
+	if name == "" or not name.is_valid_filename():
+		return _err("bad args: name (required)")
+	for k in ["x", "y", "z"]:
+		if not args.has(k):
+			return _err("bad args: x/y/z (required)")
+	var path := "%s/%s.json" % [BLUEPRINT_DIR, name]
+	if not FileAccess.file_exists(path):
+		return _err("no such blueprint: " + name)
+	var bp: Dictionary = Blueprint.deserialize(FileAccess.get_file_as_string(path))
+	if bp.is_empty():
+		return _err("bad blueprint file: " + name)
+	var anchor := Vector3i(int(args["x"]), int(args["y"]), int(args["z"]))
+	var edits: Array = Blueprint.paste_edits(bp, anchor)
+	if edits.size() > MAX_CELLS:
+		return _err("too big: %d > %d" % [edits.size(), MAX_CELLS])
+	var changed := 0
+	if world.has_method("request_block_edits"):
+		changed = int(world.request_block_edits(edits))
+	_record_action("paste_build", "%s @ (%d,%d,%d) -> %d 块" % [name, anchor.x, anchor.y, anchor.z, changed], true)
+	return {"name": name, "anchor": [anchor.x, anchor.y, anchor.z], "changed": changed}
 
 func _tool_get_block(args: Dictionary) -> Dictionary:
 	if not _ready_for_acting():

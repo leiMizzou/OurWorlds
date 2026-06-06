@@ -147,8 +147,8 @@ Light-emitting placeable blocks: `lantern`, `moonstone_lamp`, `blue_crystal`, `s
 All tools follow §1. Below, each tool lists its `args` and its `result`. Coordinates are
 integer cells. Distances are in blocks. Angles are in degrees.
 
-Quick index: `observe`, `look`, `goto`, `scan`, `place`, `break`, `build`, `get_block`,
-`say`, `set_goal`, `remember`, `get_memory`.
+Quick index: `observe`, `look`, `goto`, `scan`, `place`, `break`, `build`, `capture_build`,
+`paste_build`, `get_block`, `say`, `set_goal`, `remember`, `get_memory`.
 
 ---
 
@@ -410,6 +410,13 @@ Templates anchored relative to `_place` use template-local axes
 matches) the call still returns `ok:true` with `changed:0`.
 
 ---
+
+### 4.7b `capture_build` / `paste_build` — save & re-stamp a build (share)
+
+Capture a cuboid region's non-air blocks into a named blueprint file (`user://blueprints/<name>.json`), then paste it elsewhere (the blueprint's local origin maps to the anchor cell). Paste goes through the normal edit path, so in multiplayer the result is broadcast to everyone — how an agent (or player) shares/showcases a build.
+
+- `capture_build` args: `name` (valid filename), `x1,y1,z1`, `x2,y2,z2` (opposite corners). Result `{name, size:[dx,dy,dz], blocks}` (non-air count). Rejects > 4096 blocks.
+- `paste_build` args: `name` (must already exist), `x,y,z` (anchor). Result `{name, anchor, changed}`. Rejects missing/oversized blueprints.
 
 ### 4.8 `get_block` — read one cell
 
