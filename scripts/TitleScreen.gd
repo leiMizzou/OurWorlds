@@ -2,7 +2,7 @@ extends CanvasLayer
 # 首屏入口：让玩家先看到真实世界，再进入建造。
 
 signal continue_requested(seed: int)
-signal new_world_requested(seed: int)
+signal new_world_requested(seed: int, kind: String)
 signal delete_world_requested(seed: int)
 signal settings_requested
 
@@ -32,6 +32,8 @@ var _worlds := []
 var _selected_index := 0
 var _fallback_seed := 1337
 var _new_seed := 1337
+var _new_kind := "infinite"
+var _kind_button: CheckButton
 var _delete_pending := false
 
 func setup(worlds: Array, selected_seed: int, fallback_seed: int) -> void:
@@ -327,6 +329,12 @@ func _new_seed_panel() -> Control:
 	_new_seed_name_label.add_theme_font_size_override("font_size", 12)
 	_new_seed_name_label.modulate = Color(1.0, 0.92, 0.70, 0.82)
 	box.add_child(_new_seed_name_label)
+	_kind_button = CheckButton.new()
+	_kind_button.text = "主题岛（浮空·分区主题）"
+	_kind_button.tooltip_text = "开：生成有限浮空主题岛；关：经典无限世界"
+	_kind_button.add_theme_font_size_override("font_size", 13)
+	_kind_button.toggled.connect(func(on): _new_kind = "themed_island" if on else "infinite")
+	box.add_child(_kind_button)
 	return box
 
 func _move_selection(delta: int) -> void:
@@ -359,7 +367,7 @@ func _on_new_seed_submitted(text: String) -> void:
 	_on_new_world_pressed()
 
 func _on_new_world_pressed() -> void:
-	new_world_requested.emit(_new_world_seed())
+	new_world_requested.emit(_new_world_seed(), _new_kind)
 
 func _randomize_new_seed() -> void:
 	var rng := RandomNumberGenerator.new()
@@ -581,3 +589,9 @@ func _panel_style(bg: Color, border: Color, width: int) -> StyleBoxFlat:
 	s.corner_radius_bottom_left = 8
 	s.corner_radius_bottom_right = 8
 	return s
+
+# 仅测试用：直接设定世界类型（绕过 UI 勾选）。
+func set_new_kind_for_test(kind: String) -> void:
+	_new_kind = kind
+	if _kind_button != null:
+		_kind_button.set_pressed_no_signal(kind == "themed_island")
