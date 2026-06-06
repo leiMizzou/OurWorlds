@@ -335,9 +335,29 @@ func _detect_net_mode() -> int:
 		return NetworkManager.Mode.SERVER
 	if OS.has_environment("OW_HOST"):
 		return NetworkManager.Mode.HOST
-	if OS.has_environment("OW_CONNECT"):
+	if _connect_url() != "":
 		return NetworkManager.Mode.CLIENT
 	return NetworkManager.Mode.OFFLINE
+
+# 要连接的服务器地址：原生看环境变量 OW_CONNECT；网页看页面 URL 的 ?connect=ws://…
+# （浏览器没有环境变量；用链接直接进服，免去在 canvas 里点菜单，也便于自动化/分享）。
+func _connect_url() -> String:
+	if OS.has_feature("web"):
+		var search := str(JavaScriptBridge.eval("window.location.search", true))
+		var u := _query_param(search, "connect")
+		if u != "":
+			return u
+	if OS.has_environment("OW_CONNECT"):
+		return OS.get_environment("OW_CONNECT")
+	return ""
+
+func _query_param(search: String, key: String) -> String:
+	# search 形如 "?connect=ws%3A%2F%2F127.0.0.1%3A8971&x=1"
+	for pair in search.trim_prefix("?").split("&", false):
+		var kv: PackedStringArray = pair.split("=", true, 1)
+		if kv.size() == 2 and kv[0] == key:
+			return kv[1].uri_decode()
+	return ""
 
 func _net_port() -> int:
 	if OS.has_environment("OW_PORT"):
@@ -381,7 +401,7 @@ func _start_client_and_wait() -> void:
 	net_manager.welcomed.connect(_on_welcomed)
 	add_child(net_manager)
 	print("连接服务器中，等待入场 ...")   # 此刻 title_screen 还没建（在 _enter_world 里建），别调 set_title_active
-	net_manager.start_client(OS.get_environment("OW_CONNECT"))
+	net_manager.start_client(_connect_url())
 
 func _on_welcomed(payload: Dictionary) -> void:
 	# 服务器种子/出生点到了：建世界+玩家+子系统，并把 player 交给 net（位置上报）。
