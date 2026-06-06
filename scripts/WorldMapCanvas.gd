@@ -324,6 +324,25 @@ func _region_color(label: String) -> Color:
 			return Color(0.56, 0.70, 0.34, 0.28)
 		"草原":
 			return Color(0.34, 0.64, 0.38, 0.28)
+		# ---- 主题岛扇区 ----
+		"雪山":
+			return Color(0.78, 0.92, 1.0, 0.32)
+		"沙漠":
+			return Color(0.86, 0.74, 0.38, 0.30)
+		"热带海岸":
+			return Color(0.24, 0.72, 0.58, 0.30)
+		"村庄":
+			return Color(0.62, 0.54, 0.36, 0.28)
+		"中央广场":
+			return Color(0.78, 0.72, 0.48, 0.32)
+		"霓虹城":
+			return Color(0.18, 0.68, 0.88, 0.34)
+		"天文台":
+			return Color(0.52, 0.54, 0.78, 0.30)
+		"农田":
+			return Color(0.48, 0.72, 0.32, 0.28)
+		"海湾":
+			return Color(0.26, 0.52, 0.74, 0.30)
 		_:
 			return Color(0.36, 0.48, 0.46, 0.22)
 

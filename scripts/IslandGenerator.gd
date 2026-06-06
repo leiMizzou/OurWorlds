@@ -160,5 +160,19 @@ func region_label(wx: int, wz: int) -> String:
 		return "虚空"
 	return THEME_LABEL[theme_at(wx, wz)]
 
-func region_description(_wx: int, _wz: int) -> String:
-	return "一座浮空的主题岛。"
+const THEME_DESC := {
+	IslandTheme.SNOW: "白雪皑皑的高山，松林间有木屋和冰晶闪烁。",
+	IslandTheme.DESERT: "金沙起伏的沙丘，砂岩金字塔在烈日下矗立。",
+	IslandTheme.TROPICAL: "碧水白沙的热带海岸，棕榈摇曳，灯塔守望远方。",
+	IslandTheme.VILLAGE: "炊烟袅袅的宁静村庄，木屋沿鹅卵石小路排列。",
+	IslandTheme.PLAZA: "岛屿中心的喷泉广场，金柱耸立，四通八达。",
+	IslandTheme.CYBER: "霓虹闪烁的未来城区，钢铁与光构成冰冷的高塔。",
+	IslandTheme.OBSERVATORY: "半球穹顶的天文台，大理石台阶通向星空。",
+	IslandTheme.FARM: "阡陌纵横的田园，风车悠悠转动，作物随风摇曳。",
+	IslandTheme.BAY: "静谧的海湾，浅水拍岸，远处是无尽的虚空。",
+}
+
+func region_description(wx: int, wz: int) -> String:
+	if not inside(wx, wz):
+		return "岛屿边缘之外，虚空深渊。"
+	return THEME_DESC.get(theme_at(wx, wz), "一座浮空的主题岛。")

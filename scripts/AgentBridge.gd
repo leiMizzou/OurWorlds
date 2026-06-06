@@ -65,6 +65,11 @@ const REGION_ALIASES := {
 	"红土台地": "mesa", "岩岭": "rocky_ridge", "玄武岩岭": "basalt_ridge",
 	"雪峰": "snow_peaks", "湿地": "wetland", "沙岸": "sandy_shore",
 	"黏土滩": "clay_flat", "浅水湾": "shallow_cove",
+	# 主题岛扇区
+	"雪山": "snow_mountain", "热带海岸": "tropical_coast",
+	"村庄": "village", "中央广场": "central_plaza",
+	"霓虹城": "neon_city", "天文台": "observatory",
+	"农田": "farmland", "海湾": "bay", "虚空": "void",
 }
 
 func _ready() -> void:

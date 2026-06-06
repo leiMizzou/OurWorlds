@@ -330,10 +330,13 @@ func _new_seed_panel() -> Control:
 	_new_seed_name_label.modulate = Color(1.0, 0.92, 0.70, 0.82)
 	box.add_child(_new_seed_name_label)
 	_kind_button = CheckButton.new()
-	_kind_button.text = "主题岛（浮空·分区主题）"
-	_kind_button.tooltip_text = "开：生成有限浮空主题岛；关：经典无限世界"
+	_kind_button.text = "浮空主题岛"
+	_kind_button.tooltip_text = "九域浮空岛：雪山·沙漠·热带·村庄·广场·霓虹城·天文台·农田·海湾"
 	_kind_button.add_theme_font_size_override("font_size", 13)
-	_kind_button.toggled.connect(func(on): _new_kind = "themed_island" if on else "infinite")
+	_kind_button.toggled.connect(func(on):
+		_new_kind = "themed_island" if on else "infinite"
+		_refresh_new_seed_preview()
+	)
 	box.add_child(_kind_button)
 	return box
 
@@ -402,13 +405,15 @@ func _suggest_new_seed(selected_seed: int) -> int:
 
 func _refresh_new_seed_preview() -> void:
 	var seed := _new_world_seed()
+	var is_island := _new_kind == "themed_island"
+	var biome := "浮空主题岛" if is_island else WorldCatalog.world_biome_label(seed)
 	if _new_seed_name_label != null:
-		_new_seed_name_label.text = "将生成：%s  ·  %s地貌  #%d" % [WorldCatalog.world_name(seed), WorldCatalog.world_biome_label(seed), seed]
+		_new_seed_name_label.text = "将生成：%s  ·  %s  #%d" % [WorldCatalog.world_name(seed), biome, seed]
 	if _world_cover != null and _worlds.is_empty():
 		_world_cover.set_world_meta({
 			"seed": seed,
 			"name": WorldCatalog.world_name(seed),
-			"biome_label": WorldCatalog.world_biome_label(seed),
+			"biome_label": biome,
 			"journey_total": WorldCatalog.JOURNEY_TOTAL,
 		}, true)
 

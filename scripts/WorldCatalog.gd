@@ -149,11 +149,13 @@ static func _read_world_meta(path: String) -> Dictionary:
 		return {}
 	var edits_raw: Variant = data.get("edits", {})
 	var edits := edits_raw as Dictionary if typeof(edits_raw) == TYPE_DICTIONARY else {}
+	var kind := String(data.get("kind", "infinite"))
+	var is_island := kind == "themed_island"
 	return {
 		"seed": seed,
-		"kind": String(data.get("kind", "infinite")),
+		"kind": kind,
 		"name": world_name(seed),
-		"biome_label": world_biome_label(seed),
+		"biome_label": "浮空主题岛" if is_island else world_biome_label(seed),
 		"cover_path": String(data.get("cover_path", "")),
 		"cover_exists": FileAccess.file_exists(String(data.get("cover_path", ""))),
 		"path": path,
@@ -166,7 +168,7 @@ static func _read_world_meta(path: String) -> Dictionary:
 		"journey_count": journey_count_from_data(data),
 		"journey_total": JOURNEY_TOTAL,
 		"region_count": region_count_from_data(data),
-		"region_total": WorldGenerator.REGION_LABELS.size(),
+		"region_total": 9 if is_island else WorldGenerator.REGION_LABELS.size(),
 	}
 
 static func _read_world_data_with_backup(path: String) -> Dictionary:
