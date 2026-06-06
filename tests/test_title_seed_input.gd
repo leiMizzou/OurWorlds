@@ -19,7 +19,7 @@ func check(cond: bool, msg: String) -> void:
 func _initialize() -> void:
 	_screen = TitleScreen.new()
 	root.add_child(_screen)
-	_screen.new_world_requested.connect(func(seed: int): _requested.append(seed))
+	_screen.new_world_requested.connect(func(seed: int, _kind: String): _requested.append(seed))
 	_screen.setup([], 1337, 1337)
 
 	check(_screen._new_seed_edit != null, "标题页包含新世界种子输入")

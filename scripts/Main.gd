@@ -159,7 +159,8 @@ func _enter_world(seed_value: int, spawn_override) -> void:
 	_current_seed = seed_value
 	_setup_celestial_bodies()
 	var save_file := _save_path_for_seed(_current_seed)
-	world.setup(lib, _current_seed, save_file)
+	var kind := _resolve_world_kind(save_file)
+	world.setup(lib, _current_seed, save_file, kind)
 	world.set_view_radius(int(_settings.get("view_radius", 4)))
 	if OS.has_environment("VC_RADIUS"):
 		world.set_view_radius(int(OS.get_environment("VC_RADIUS")))
@@ -407,14 +408,23 @@ func _make_remote_avatar() -> Node3D:
 
 func _start_dedicated_server() -> void:
 	# 纯权威服务器：只建 WorldData + NetworkManager，不建玩家/HUD/渲染。
-	var data := WorldData.new(_current_seed)
+	var env_kind := OS.get_environment("VC_WORLD_KIND") if OS.has_environment("VC_WORLD_KIND") else "infinite"
+	var save_path := _server_save_path()
+	# 已有服务器存档 -> 以存档记录的 kind 为准（即使重启时漏设 VC_WORLD_KIND，生成器与广播也一致）
+	var server_kind := env_kind
+	if save_path != "" and FileAccess.file_exists(save_path):
+		var p := JSON.new()
+		if p.parse(FileAccess.get_file_as_string(save_path)) == OK and typeof(p.data) == TYPE_DICTIONARY:
+			server_kind = str((p.data as Dictionary).get("kind", env_kind))
+	var data := WorldData.new(_current_seed, server_kind)
 	net_manager = NetworkManager.new()
 	net_manager.name = "NetworkManager"
 	net_manager.mode = NetworkManager.Mode.SERVER
+	net_manager.world_kind = server_kind
 	net_manager.chat_hub = ChatHub.new()
 	var spawn := Vector3(0.5, data.surface_y(0, 0) + 3, 0.5)
 	net_manager.set_authority_data(data, _current_seed, spawn)
-	net_manager.world_save_path = _server_save_path()        # 世界重启不丢：载入已有存档 + 定期自动存盘
+	net_manager.world_save_path = save_path        # 世界重启不丢：载入已有存档 + 定期自动存盘
 	if net_manager.load_world(net_manager.world_save_path):
 		print("已载入服务器世界存档：", net_manager.world_save_path)
 	add_child(net_manager)
@@ -437,6 +447,7 @@ func _start_host_after_enter() -> void:
 	net_manager.chat_hub = chat_hub
 	net_manager.avatar_factory = _make_remote_avatar
 	net_manager.set_authority_data(world._data, _current_seed, player.global_position)
+	net_manager.world_kind = world.world_kind()
 	world.net = net_manager
 	add_child(net_manager)
 	net_manager.start_host(_net_port())
@@ -454,6 +465,7 @@ func _start_client_and_wait() -> void:
 
 func _on_welcomed(payload: Dictionary) -> void:
 	# 服务器种子/出生点到了：建世界+玩家+子系统，并把 player 交给 net（位置上报）。
+	OS.set_environment("VC_WORLD_KIND", str(payload.get("kind", "infinite")))
 	var sp: Array = payload.get("spawn", [0, 40, 0])
 	var spawn := Vector3(float(sp[0]), float(sp[1]), float(sp[2]))
 	_enter_world(int(payload.get("seed", _current_seed)), spawn)
@@ -472,6 +484,15 @@ func _save_path_for_seed(seed: int) -> String:
 	if OS.has_environment("VC_NO_SAVE"):
 		return ""
 	return WorldCatalog.save_path_for_seed(seed)
+
+# 解析本次进入世界的 kind：存档已存在 -> 读存档元数据；否则看新建时设的环境变量；再否则 infinite。
+func _resolve_world_kind(save_file: String) -> String:
+	var meta := WorldCatalog._read_world_meta(save_file)
+	if not meta.is_empty():
+		return str(meta.get("kind", "infinite"))
+	if OS.has_environment("VC_WORLD_KIND"):
+		return OS.get_environment("VC_WORLD_KIND")
+	return "infinite"
 
 func _find_spawn_position() -> Vector3:
 	var best := Vector3(0.5, world.surface_y(0, 0) + 3, 0.5)
@@ -1312,11 +1333,12 @@ func _continue_selected_world(seed: int) -> void:
 	else:
 		set_title_active(false)
 
-func _start_new_world(seed: int = 0) -> void:
+func _start_new_world(seed: int = 0, kind: String = "infinite") -> void:
 	if world != null:
 		world.save_world(true)
 	var next_seed := seed if seed > 0 else _random_seed()
 	OS.set_environment("VC_SEED", str(next_seed))
+	OS.set_environment("VC_WORLD_KIND", kind)
 	get_tree().paused = false
 	get_tree().reload_current_scene()
 
