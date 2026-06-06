@@ -1,7 +1,7 @@
 # OurWorlds 联机化设计方案
 
 日期：2026-06-03
-状态：待评审（已根据可行性评审修订）
+状态：待评审（已根据可行性评审修订）· **M0（WorldData 数据核心抽取）已实现并验证**（48/48 自检），详见 [`../plans/2026-06-06-p1-online-multiplayer.md`](../plans/2026-06-06-p1-online-multiplayer.md)。`World` 现为渲染/流式外壳，`scripts/WorldData.gd` 为可无头数据核心。
 
 ## 1. 目标与范围
 
