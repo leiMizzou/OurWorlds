@@ -44,10 +44,23 @@ func register_peer(peer_id: int, display_name: String) -> String:
 	var nm := display_name.strip_edges()
 	if nm == "":
 		nm = eid
-	_peers[peer_id] = {"eid": eid, "name": nm, "pos": _spawn, "yaw": 0.0, "edits": []}
+	_peers[peer_id] = {"eid": eid, "name": nm, "pos": _scatter_spawn(_eid_counter), "yaw": 0.0, "edits": []}
 	if chat_hub != null:
 		chat_hub.register(eid, nm, "human")
 	return eid
+
+# 给第 index 个登记的玩家一个绕基准出生点散开的落点——避免大家叠在同一格而"互相看不见"。
+# 黄金角均匀铺开 + 贴合该处地表；无权威数据时退回基准点。
+func _scatter_spawn(index: int) -> Vector3:
+	if _data == null or index <= 0:
+		return _spawn
+	var slot := index % 16                          # 循环槽位，避免长期运行越散越远
+	var golden := 2.39996323                        # 黄金角(rad)，均匀不扎堆
+	var radius := 2.5 + 0.9 * sqrt(float(slot))
+	var sx := _spawn.x + cos(golden * float(slot)) * radius
+	var sz := _spawn.z + sin(golden * float(slot)) * radius
+	var sy := float(_data.surface_y(roundi(sx), roundi(sz))) + 2.0
+	return Vector3(sx, sy, sz)
 
 func drop_peer(peer_id: int) -> void:
 	if not _peers.has(peer_id):
@@ -160,10 +173,11 @@ func build_welcome(peer_id: int) -> Dictionary:
 		var p: Dictionary = _peers[pid]
 		var pos: Vector3 = p["pos"]
 		roster.append({"eid": p["eid"], "name": p["name"], "pos": [pos.x, pos.y, pos.z]})
+	var sp: Vector3 = _peers[peer_id]["pos"] if _peers.has(peer_id) else _spawn
 	return {
 		"seed": _seed,
 		"kind": world_kind,
-		"spawn": [_spawn.x, _spawn.y, _spawn.z],
+		"spawn": [sp.x, sp.y, sp.z],
 		"your_eid": str(_peers.get(peer_id, {}).get("eid", "")),
 		"peers": roster,
 		"deltas": _data.all_deltas(),

@@ -11,6 +11,9 @@ build/
 *.pck
 *.zip
 
+# Godot 4.6 resource UID cache (auto-generated)
+*.uid
+
 # 系统文件
 .DS_Store
 Thumbs.db
