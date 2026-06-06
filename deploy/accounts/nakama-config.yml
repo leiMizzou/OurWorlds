@@ -1,0 +1,20 @@
+# Nakama 配置（本地开发用）。上线前把所有 CHANGE_ME 改成随机强密钥！
+name: ourworlds-nakama
+data_dir: "/nakama/data"
+
+console:
+  username: "admin"
+  password: "CHANGE_ME_admin_password"        # 管理控制台 http://localhost:7351
+
+session:
+  encryption_key: "CHANGE_ME_long_random_session_key"
+  token_expiry_sec: 7200
+  refresh_encryption_key: "CHANGE_ME_long_random_refresh_key"
+
+socket:
+  server_key: "CHANGE_ME_server_key"           # 客户端 SDK 用这个 key 连
+  max_message_size_bytes: 8192
+
+# 社交登录说明（密钥不在这里硬编码——见 deploy/accounts/README.md 的网关说明）：
+#  - Google：Nakama 原生支持（客户端拿 Google id_token → AuthenticateGoogle）。
+#  - GitHub / Twitter：Nakama 无原生 provider，走自定义 OAuth（网页/服务端换 token → AuthenticateCustom）。

@@ -1,0 +1,42 @@
+# OurWorlds 账号后端（M4）：Nakama + Postgres，本地一条命令起。
+#   cd deploy/accounts && docker compose up -d
+# Nakama 负责：注册/登录（邮箱密码 + Google/GitHub/Twitter 社交登录）、会话、入场票、云存档、世界列表。
+# 游戏仿真仍在 Godot 世界服务器；客户端先在 Nakama 登录拿会话/票，再用票连 Godot 服务器。
+# 版本按需对齐 https://hub.docker.com/r/heroiclabs/nakama 的当前 tag。
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: nakama
+      POSTGRES_USER: nakama
+      POSTGRES_PASSWORD: localdev_change_me
+    volumes:
+      - ow_nakama_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "nakama", "-d", "nakama"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nakama:
+    image: heroiclabs/nakama:3.22.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint:
+      - "/bin/sh"
+      - "-ecx"
+      - >
+        /nakama/nakama migrate up --database.address nakama:localdev_change_me@postgres:5432/nakama &&
+        exec /nakama/nakama --config /nakama/data/ourworlds.yml
+        --database.address nakama:localdev_change_me@postgres:5432/nakama
+    volumes:
+      - ./nakama-config.yml:/nakama/data/ourworlds.yml:ro
+    ports:
+      - "7349:7349"   # gRPC
+      - "7350:7350"   # HTTP API（客户端 SDK 连这个）
+      - "7351:7351"   # 管理控制台
+    restart: unless-stopped
+
+volumes:
+  ow_nakama_data:
