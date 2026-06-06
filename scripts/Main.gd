@@ -326,6 +326,7 @@ func _enter_world(seed_value: int, spawn_override) -> void:
 	add_child(login_screen)
 	login_screen.setup(nakama_client)
 	login_screen.logged_in.connect(_on_logged_in)
+	nakama_client.player_state_loaded.connect(_on_player_state_loaded)
 	net_menu.login_requested.connect(func() -> void: login_screen.open())
 	_setup_agent_bridge()
 
@@ -524,6 +525,7 @@ func _process(delta: float) -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST and world != null:
 		world.save_world(true)
+		_save_account_state()        # 登录态：把当前世界+位置写到云端（跨设备续上）
 
 func _show_backup_recovery_feedback_if_needed() -> void:
 	if _backup_recovery_feedback_shown or world == null or not world.loaded_from_backup():
@@ -731,11 +733,34 @@ func _on_net_host_requested() -> void:
 	_start_host_after_enter()
 
 func _on_logged_in(session: Dictionary) -> void:
-	# 存下会话（token/user_id），供连世界服务器时作入场票 + 云存档键（握手/存档是后续 M4 步骤）。
+	# 存下会话（token/user_id），供连世界服务器时作入场票 + 云存档键。
 	_session = session
 	if hud != null and hud.has_method("show_feedback"):
 		var who := str(session.get("user_id", ""))
 		hud.show_feedback("account", "已登录" + (("：" + who.substr(0, 8)) if who != "" else ""))
+	if nakama_client != null:
+		nakama_client.load_player_state()        # 登录后取回云端存档（跨设备续上）
+
+func _on_player_state_loaded(state: Dictionary) -> void:
+	# 同一世界时把玩家挪到云端记录的位置；空存档/异世界则不动。
+	if player == null or state.is_empty():
+		return
+	if int(state.get("world", _current_seed)) != _current_seed:
+		return
+	var sp: Array = state.get("spawn", [])
+	if sp.size() == 3:
+		world.prime(world.chunk_of(int(sp[0]), int(sp[2])), 1)
+		player.global_position = Vector3(float(sp[0]), float(sp[1]) + 1.0, float(sp[2]))
+		player.velocity = Vector3.ZERO
+		if hud != null and hud.has_method("show_feedback"):
+			hud.show_feedback("account", "已恢复云端存档")
+
+func _save_account_state() -> void:
+	# 登录态下把当前世界 + 位置写到云端（关游戏/退出时调）。游客不存。
+	if nakama_client == null or not nakama_client.is_logged_in() or player == null:
+		return
+	var p := player.global_position
+	nakama_client.save_player_state({"world": _current_seed, "spawn": [int(p.x), int(p.y), int(p.z)]})
 
 func _on_net_join_requested(url: String) -> void:
 	# 以客户端身份加入：设连接地址并重载场景，由 _ready 走 CLIENT 分支。
