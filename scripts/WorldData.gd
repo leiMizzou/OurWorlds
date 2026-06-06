@@ -5,16 +5,25 @@ extends RefCounted
 # 地形靠种子确定性生成；只存"增量"——某格被改成非生成值才记一条；改回生成值即移除。
 const Chunk = preload("res://scripts/Chunk.gd")
 const WorldGenerator = preload("res://scripts/WorldGenerator.gd")
+const IslandGenerator = preload("res://scripts/IslandGenerator.gd")
 
-var _gen: WorldGenerator
+var _gen                       # WorldGenerator 或 IslandGenerator（同接口）
+var _kind := "infinite"
 var _world_seed := 1337
 var _chunks := {}              # Vector2i -> Chunk（数据；含 base_blocks 基线快照）
 var _deltas := {}              # "cx,cz" -> {str(index) -> block_id}
 var _revisions := {}           # "cx,cz" -> int（每次编辑 +1，供联机同步增量）
 
-func _init(world_seed: int = 1337) -> void:
+func _init(world_seed: int = 1337, kind: String = "infinite") -> void:
 	_world_seed = world_seed
-	_gen = WorldGenerator.new(world_seed)
+	_kind = kind
+	if kind == "themed_island":
+		_gen = IslandGenerator.new(world_seed)
+	else:
+		_gen = WorldGenerator.new(world_seed)
+
+func world_kind() -> String:
+	return _kind
 
 func world_seed() -> int:
 	return _world_seed
