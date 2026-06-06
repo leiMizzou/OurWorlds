@@ -21,16 +21,21 @@ const MEMORY_NOTE_CAP := 50
 const SY := Chunk.SY                 # 96
 const NEARBY_LANDMARK_CAP := 6
 const NEARBY_LANDMARK_RANGE := 64.0
+const DEFAULT_EID := "agent"         # 无实体上下文（如直接测试调用）时的默认实体 id
+const LOBBY_CHAT_RECENT := 20        # observe.chat 返回的最近大厅消息条数
 
 # 注入引用（Main 在 _ready 末尾设置）
 var world
 var player
 var avatar                           # opc-ourworlds 的专属小人；有它就驱动它（而不是玩家）
 var hud
+var chat_hub                         # ChatHub（Main 注入；为空则无聊天/在线列表功能）
 
 var _server: TCPServer
-var _peer: StreamPeerTCP
-var _read_buffer := PackedByteArray()
+var _peers := []                     # [{sock, buf, eid}] —— 多客户端，每连接一个实体
+var _entity_counter := 0
+var _current_eid := DEFAULT_EID      # 当前正在分发请求的实体（dispatch 时设置）
+var _since := {}                     # eid -> 已读到的聊天 seq（observe.inbox 增量用）
 var _recent_actions := []            # 近期"动作型"调用环形缓冲（<=8），surface 进 observe
 var _memory := {"version": 1, "goal": "", "notes": [], "updated_at": 0}
 var _port := 0
@@ -76,9 +81,10 @@ func _ready() -> void:
 	print("AgentBridge 监听 127.0.0.1:%d" % _port)
 
 func _exit_tree() -> void:
-	if _peer != null:
-		_peer.disconnect_from_host()
-		_peer = null
+	for peer in _peers:
+		if peer["sock"] != null:
+			peer["sock"].disconnect_from_host()
+	_peers.clear()
 	if _server != null:
 		_server.stop()
 		_server = null
@@ -86,57 +92,70 @@ func _exit_tree() -> void:
 func _process(_delta: float) -> void:
 	if _server == null:
 		return
-	# 接受新连接（单客户端）。已有活动 peer 时不再接受第二个（保持单客户端语义）。
-	if _peer == null and _server.is_connection_available():
-		_peer = _server.take_connection()
-		_read_buffer = PackedByteArray()
-		_recent_actions.clear()
+	# 接受新连接（多客户端）：每个连接 = 一个在线实体。
+	while _server.is_connection_available():
+		var sock := _server.take_connection()
+		var eid := _next_eid()
+		_peers.append({"sock": sock, "buf": PackedByteArray(), "eid": eid})
+		if chat_hub != null:
+			chat_hub.register(eid, eid, "agent")
 		_notify_agent_status(true)
-	if _peer == null:
-		return
-	_peer.poll()
-	var status := _peer.get_status()
-	if status == StreamPeerTCP.STATUS_ERROR or status == StreamPeerTCP.STATUS_NONE:
-		_drop_peer()
-		return
-	if status != StreamPeerTCP.STATUS_CONNECTED:
-		return
-	var available := _peer.get_available_bytes()
-	if available > 0:
-		var chunk := _peer.get_data(available)
-		var code := int(chunk[0])
-		if code == OK:
-			var bytes: PackedByteArray = chunk[1]
-			_read_buffer.append_array(bytes)
-	_process_buffer()
+	var i := 0
+	while i < _peers.size():
+		var peer: Dictionary = _peers[i]
+		var sock: StreamPeerTCP = peer["sock"]
+		sock.poll()
+		var status := sock.get_status()
+		if status == StreamPeerTCP.STATUS_ERROR or status == StreamPeerTCP.STATUS_NONE:
+			_drop_peer_at(i)
+			continue
+		if status != StreamPeerTCP.STATUS_CONNECTED:
+			i += 1
+			continue
+		var available := sock.get_available_bytes()
+		if available > 0:
+			var chunk := sock.get_data(available)
+			if int(chunk[0]) == OK:
+				var b: PackedByteArray = peer["buf"]
+				b.append_array(chunk[1] as PackedByteArray)
+				peer["buf"] = b
+		_process_peer_buffer(peer)
+		i += 1
 
-# 从读缓冲里切出完整行（以 \n 分隔），逐行分发并回写响应。残留半行留到下一帧。
-func _process_buffer() -> void:
+# 从某 peer 的读缓冲切出完整行（\n 分隔），以该 peer 的实体身份逐行分发并回写。残留半行留到下一帧。
+func _process_peer_buffer(peer: Dictionary) -> void:
+	var buf: PackedByteArray = peer["buf"]
 	while true:
-		var nl := _read_buffer.find(10)   # '\n'
+		var nl := buf.find(10)   # '\n'
 		if nl < 0:
 			break
-		var line_bytes := _read_buffer.slice(0, nl)
-		_read_buffer = _read_buffer.slice(nl + 1)
+		var line_bytes := buf.slice(0, nl)
+		buf = buf.slice(nl + 1)
 		var line := line_bytes.get_string_from_utf8().strip_edges()
-		if line == "":
-			continue
-		var response := dispatch_line(line)
-		_send_line(response)
+		if line != "":
+			_send_line(peer["sock"], dispatch_line(line, str(peer["eid"])))
+	peer["buf"] = buf
 
-func _send_line(obj: Dictionary) -> void:
-	if _peer == null:
+func _send_line(sock: StreamPeerTCP, obj: Dictionary) -> void:
+	if sock == null:
 		return
-	var text := JSON.stringify(obj) + "\n"
-	_peer.put_data(text.to_utf8_buffer())
+	sock.put_data((JSON.stringify(obj) + "\n").to_utf8_buffer())
 
-func _drop_peer() -> void:
-	if _peer != null:
-		_peer.disconnect_from_host()
-	_peer = null
-	_read_buffer = PackedByteArray()
-	_recent_actions.clear()
-	_notify_agent_status(false)
+func _drop_peer_at(i: int) -> void:
+	if i < 0 or i >= _peers.size():
+		return
+	var peer: Dictionary = _peers[i]
+	if peer["sock"] != null:
+		peer["sock"].disconnect_from_host()
+	if chat_hub != null:
+		chat_hub.unregister(str(peer["eid"]))
+	_since.erase(str(peer["eid"]))
+	_peers.remove_at(i)
+	_notify_agent_status(not _peers.is_empty())
+
+func _next_eid() -> String:
+	_entity_counter += 1
+	return "agent-%d" % _entity_counter
 
 # 通知 HUD 显示/隐藏「agent 已连接」角标（hud 由 Main 注入；未注入则静默跳过）。
 func _notify_agent_status(connected: bool) -> void:
@@ -144,7 +163,7 @@ func _notify_agent_status(connected: bool) -> void:
 		hud.set_agent_status(connected, str(_memory.get("goal", "")))
 
 # ---------- 分发（直接可测：测试不经 TCP，直接喂一行 JSON 文本）----------
-func dispatch_line(line: String) -> Dictionary:
+func dispatch_line(line: String, eid: String = DEFAULT_EID) -> Dictionary:
 	# 用 JSON 实例 parse()（返回错误码、不向 stderr 打印）—— 坏行只返回 bad json，流不断、日志不脏。
 	var parser := JSON.new()
 	var err := parser.parse(line)
@@ -160,10 +179,11 @@ func dispatch_line(line: String) -> Dictionary:
 	var tool := str(req.get("tool", ""))
 	var args_raw: Variant = req.get("args", {})
 	var args: Dictionary = args_raw if typeof(args_raw) == TYPE_DICTIONARY else {}
-	return dispatch(rid, tool, args)
+	return dispatch(rid, tool, args, eid)
 
-# 直接分发（给测试 / TCP 共用）。返回完整响应信封。
-func dispatch(rid: Variant, tool: String, args: Dictionary) -> Dictionary:
+# 直接分发（给测试 / TCP 共用）。eid = 调用方实体。返回完整响应信封。
+func dispatch(rid: Variant, tool: String, args: Dictionary, eid: String = DEFAULT_EID) -> Dictionary:
+	_current_eid = eid
 	var result := _handle(tool, args)
 	if result.has("__error"):
 		return {"id": rid, "ok": false, "error": str(result["__error"])}
@@ -180,6 +200,8 @@ func _handle(tool: String, args: Dictionary) -> Dictionary:
 	match tool:
 		"observe":
 			return _tool_observe(args)
+		"identify":
+			return _tool_identify(args)
 		"look":
 			return _tool_look(args)
 		"goto":
@@ -253,6 +275,12 @@ func _tool_observe(args: Dictionary) -> Dictionary:
 		"nearby_landmarks": _nearby_landmarks(),
 		"recent_actions": _recent_actions.duplicate(true),
 	}
+	if chat_hub != null:
+		result["chat"] = chat_hub.lobby_recent(LOBBY_CHAT_RECENT)
+		var since := int(_since.get(_current_eid, 0))
+		var unread: Dictionary = chat_hub.unread_for(_current_eid, since)
+		result["inbox"] = unread["messages"]
+		_since[_current_eid] = unread["last_seq"]
 	return result
 
 func _tool_look(args: Dictionary) -> Dictionary:
@@ -464,6 +492,15 @@ func _tool_say(args: Dictionary) -> Dictionary:
 	var text := str(args.get("text", "")).strip_edges()
 	if text.length() > 120:
 		text = text.substr(0, 120)
+	# 路由到聊天中枢（若注入）：to 省略=公共大厅；to=名字/id=私聊。
+	var to_label := "lobby"
+	if chat_hub != null:
+		var to_raw := str(args.get("to", "")).strip_edges()
+		if to_raw == "":
+			chat_hub.post(_current_eid, "", text)
+		else:
+			chat_hub.post(_current_eid, chat_hub.resolve(to_raw), text)
+			to_label = to_raw
 	var shown := false
 	if hud != null and hud.has_method("show_feedback"):
 		hud.show_feedback("agent", text)
@@ -472,7 +509,7 @@ func _tool_say(args: Dictionary) -> Dictionary:
 		player.action_feedback.emit("agent", text)
 		shown = true
 	_record_action("say", text, shown)
-	return {"shown": shown}
+	return {"shown": shown, "to": to_label}
 
 func _tool_set_goal(args: Dictionary) -> Dictionary:
 	var text := str(args.get("text", "")).strip_edges()
@@ -480,7 +517,9 @@ func _tool_set_goal(args: Dictionary) -> Dictionary:
 		text = text.substr(0, 200)
 	_memory["goal"] = text
 	_save_memory()
-	if _peer != null:
+	if chat_hub != null:
+		chat_hub.set_status(_current_eid, text)
+	if not _peers.is_empty():
 		_notify_agent_status(true)
 	return {"goal": text}
 
@@ -502,6 +541,15 @@ func _tool_get_memory(_args: Dictionary) -> Dictionary:
 		"notes": (_memory.get("notes", []) as Array).duplicate(),
 		"updated_at": int(_memory.get("updated_at", 0)),
 	}
+
+# 报名：设置当前实体在在线列表里的显示名（连接后调用；默认名为 agent-N）。
+func _tool_identify(args: Dictionary) -> Dictionary:
+	var name := str(args.get("name", "")).strip_edges()
+	if name.length() > 40:
+		name = name.substr(0, 40)
+	if chat_hub != null and name != "":
+		chat_hub.register(_current_eid, name, "agent")
+	return {"entity_id": _current_eid, "name": name}
 
 # ============ 辅助：感知 ============
 

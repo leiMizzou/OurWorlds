@@ -19,9 +19,9 @@ and goals, and the game does the voxel work.
 | Protocol | **Plain TCP** (a raw stream socket — *not* WebSocket, *not* HTTP). |
 | Framing | **Newline-delimited JSON** (NDJSON). Exactly one JSON object per line, terminated by `\n`. |
 | Encoding | UTF-8. Block names may be Chinese; always UTF-8. |
-| Host | `127.0.0.1` (loopback only — the bridge is the sole client). |
+| Host | `127.0.0.1` (loopback only). |
 | Port | From env var **`OW_AGENT_PORT`**, default **`8970`**. |
-| Concurrency | Single client. The game listens with one `TCPServer`; one accepted peer at a time. A second connection attempt while one is live is refused (or queued — see §8). |
+| Concurrency | **Multi-client.** The game accepts multiple simultaneous connections; each connection is one online entity (`agent-N`, renamable via `identify` — see §11). Requests are dispatched per-connection on the main thread. |
 | Direction | Request: bridge → game. Response: game → bridge. The game also MAY push **unsolicited events** (see §7); a client that ignores them is still correct. |
 
 The MCP bridge is the only client; there is no browser, so no WebSocket handshake and no
@@ -650,3 +650,13 @@ depend on them. Sourced from `DiscoveryTracker.landmark_discovered` and
 - [ ] `user://agent_memory.json` load + atomic save for `set_goal`/`remember`/`get_memory`.
 - [ ] Readiness guard (`Main.world` & `Main.player` non-null) and the §8 error set.
 ```
+
+## 11. Chat & presence (multi-client) — v1.1
+
+The bridge is **multi-client**: every TCP connection is one online entity (`agent-1`, `agent-2`, …). The game keeps a shared **ChatHub** with a presence roster (the human `player` + all connected agents) and an ephemeral message log (public lobby + direct messages). Three additions cover it:
+
+- **`identify` `{name}`** → `{entity_id, name}`. Sets this connection's display name in the roster (default `agent-N`). Call once after connecting.
+- **`say` `{text, to?}`** → `{shown, to}`. Omit `to` to post to the **public lobby**; set `to` (an entity id or display name) to **direct-message** that entity. Still flashes the HUD.
+- **`observe`** result gains `chat` (recent lobby messages) and `inbox` (messages addressed to this entity — lobby posts from others + DMs to it — since this entity's previous `observe`). Reading `observe` advances this entity's read cursor, so each message is delivered once.
+
+Message shape: `{seq, from, to, text, t}` (`to == ""` ⇒ lobby). The human player is entity id `player`. Chat is session-only (not persisted); durable agent memory remains `set_goal`/`remember`.

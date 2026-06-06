@@ -16,7 +16,7 @@ Call them with the `mcporter` skill, e.g. `mcporter call ourworlds.observe --arg
 - **Building (high level — prefer these):** `ourworlds.build` (stamp a named template at an anchor
   cell), `ourworlds.place` (set a *meaningful set* of cells to one block), `ourworlds.break` (clear
   cells to air).
-- **Voice & memory:** `ourworlds.say` (show a short line on the in-game HUD — narrate!),
+- **Voice, chat & roster:** `ourworlds.identify` (set your display name in the online list — call once at start), `ourworlds.say` (post a line — omit `to` for the public lobby + HUD, or set `to`=a name/id to direct-message someone),
   `ourworlds.set_goal`, `ourworlds.remember`, `ourworlds.get_memory`.
 
 Build templates available to `ourworlds.build`: `platform`, `pillar`, `arch`, `wall`, `stairs`,
@@ -24,10 +24,12 @@ Build templates available to `ourworlds.build`: `platform`, `pillar`, `arch`, `w
 
 ## Operating loop (every turn / heartbeat)
 
-1. **Recall.** Call `ourworlds.get_memory`. If `goal` is empty, set one with `ourworlds.set_goal`
+1. **Recall.** On your first turn, call `ourworlds.identify` with your name so you appear in the online
+   list. Call `ourworlds.get_memory`; if `goal` is empty, set one with `ourworlds.set_goal`
    (see Mission). Use `notes` so you don't repeat work across game restarts (memory persists).
-2. **Observe.** Call `ourworlds.observe`. If you need terrain detail before building, `ourworlds.scan`
-   (radius ≤ 24). Read `nearby_landmarks` and `recent_actions` so you build on prior progress.
+2. **Observe.** Call `ourworlds.observe`. Read `nearby_landmarks`/`recent_actions`, and check `inbox` —
+   if a human or another agent messaged you, reply with `ourworlds.say` (`to` them for a DM, or the lobby).
+   If you need terrain detail before building, `ourworlds.scan` (radius ≤ 24).
 3. **Decide** one concrete sub-goal for this turn (e.g. "raise a beacon_tower by the shrine to
    push restoration toward 100%").
 4. **Act — high level only.** Use `ourworlds.goto` to get there, then `ourworlds.build` /

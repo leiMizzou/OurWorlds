@@ -23,6 +23,8 @@ const HomeBeacon = preload("res://scripts/HomeBeacon.gd")
 const PhotoOverlay = preload("res://scripts/PhotoOverlay.gd")
 const AgentBridge = preload("res://scripts/AgentBridge.gd")
 const AgentAvatar = preload("res://scripts/AgentAvatar.gd")
+const ChatHub = preload("res://scripts/ChatHub.gd")
+const ChatPanel = preload("res://scripts/ChatPanel.gd")
 
 const DAY_LEN := 180.0   # 一个昼夜 180 秒
 const AUTO_SAVE_INTERVAL := 18.0
@@ -52,6 +54,8 @@ var block_palette: BlockPalette
 var travel_journal: TravelJournal
 var world_map: WorldMap
 var photo_overlay: PhotoOverlay
+var chat_hub
+var chat_panel: ChatPanel
 
 var _sun: DirectionalLight3D
 var _env: Environment
@@ -260,6 +264,11 @@ func _ready() -> void:
 	else:
 		set_title_active(true)
 	_show_backup_recovery_feedback_if_needed()
+	chat_hub = ChatHub.new()
+	chat_hub.register("player", "你", "human")
+	chat_panel = ChatPanel.new()
+	add_child(chat_panel)
+	chat_panel.setup(chat_hub, "player")
 	_setup_agent_bridge()
 
 # 代理桥（仅在设置了 OW_AGENT_PORT 时启用）：让外部 LLM 经 TCP/NDJSON 感知并操作游戏。
@@ -272,6 +281,7 @@ func _setup_agent_bridge() -> void:
 	bridge.world = world
 	bridge.player = player
 	bridge.hud = hud
+	bridge.chat_hub = chat_hub
 	# opc-ourworlds 的专属身体：跟玩家分开，桥驱动它
 	var ai_avatar := AgentAvatar.new()
 	ai_avatar.name = "AgentAvatar"
@@ -394,6 +404,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			elif block_palette != null and block_palette.handle_palette_key(event.keycode):
 				get_viewport().set_input_as_handled()
 		return
+	if chat_panel != null and chat_panel.is_open():
+		if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+			set_chat_active(false)
+			get_viewport().set_input_as_handled()
+		return
 	if _title_active:
 		if event is InputEventKey and event.pressed and not event.echo:
 			if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
@@ -429,9 +444,30 @@ func _unhandled_input(event: InputEvent) -> void:
 		set_world_map_active(true)
 		get_viewport().set_input_as_handled()
 		return
+	if event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER):
+		set_chat_active(true)
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
 		set_game_paused(not get_tree().paused)
 		get_viewport().set_input_as_handled()
+
+func set_chat_active(active: bool) -> void:
+	if chat_panel == null:
+		return
+	if active:
+		chat_panel.open()
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		if player != null:
+			player.set_physics_process(false)
+			player.set_process_unhandled_input(false)
+	else:
+		chat_panel.close()
+		if player != null:
+			player.set_physics_process(true)
+			player.set_process_unhandled_input(true)
+		if not _title_active and not _palette_active and not _journal_active and not _map_active and not get_tree().paused:
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func set_game_paused(paused: bool) -> void:
 	if _title_active or _palette_active or _journal_active or _map_active:

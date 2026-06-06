@@ -338,7 +338,8 @@ server.registerTool(
     description:
       "Full situational snapshot: player pos & facing, region, time of day, " +
       "selected block & hotbar, a local terrain heightmap, nearby landmarks, " +
-      "and recent actions. The agent's primary perception call.",
+      "and recent actions. Also returns recent lobby `chat` and this agent's " +
+      "unread `inbox` (messages others sent it). The agent's primary perception call.",
     inputSchema: {
       heightmap_size: z
         .number()
@@ -513,13 +514,17 @@ server.registerTool(
   {
     title: "Say",
     description:
-      "Show an agent message on the in-game HUD feedback banner (≤120 chars). " +
-      "Narrate or announce intent to a human watching the screen.",
+      "Post a chat message (≤120 chars) and flash the in-game HUD. Omit `to` to " +
+      "post to the public lobby; set `to` to direct-message a specific entity.",
     inputSchema: {
-      text: z.string().describe("Message to show on-screen (trimmed to 120 chars)."),
+      text: z.string().describe("Message text (trimmed to 120 chars)."),
+      to: z
+        .string()
+        .optional()
+        .describe("DM target: entity id or display name. Omit = public lobby."),
     },
   },
-  async (args) => forward("say", args),
+  async (args) => forward("say", stripUndefined(args)),
 );
 
 // 4.10 set_goal
@@ -562,6 +567,21 @@ server.registerTool(
     inputSchema: {},
   },
   async () => forward("get_memory", {}),
+);
+
+// 4.13 identify
+server.registerTool(
+  "identify",
+  {
+    title: "Identify",
+    description:
+      "Announce this agent's display name in the world's online list and chat " +
+      "roster. Call once right after connecting (default name is agent-N).",
+    inputSchema: {
+      name: z.string().describe("Display name shown to other players/agents (≤40 chars)."),
+    },
+  },
+  async (args) => forward("identify", args),
 );
 
 /** Drop keys whose value is undefined so optional args aren't serialized as null. */
