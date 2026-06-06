@@ -9,6 +9,7 @@ const Chunk = preload("res://scripts/Chunk.gd")
 const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
 const ChunkMesher = preload("res://scripts/ChunkMesher.gd")
 const WorldGenerator = preload("res://scripts/WorldGenerator.gd")
+const WorldData = preload("res://scripts/WorldData.gd")
 
 const MAX_INFLIGHT := 8        # 同时在后台算的区块上限（运行时由 _max_inflight 决定，见 setup）
 const APPLY_PER_FRAME := 3     # 每帧最多组装几个（主线程）
@@ -40,10 +41,9 @@ var track_target: Node3D
 var save_path := ""
 var cover_path := ""
 
-var _gen: WorldGenerator
+var _data: WorldData           # 可无头数据核心：拥有 seed/生成器/区块数据/增量/revision
 var _world_seed := 1337
-var _chunks := {}              # Vector2i -> Chunk(数据)   —— 仅主线程访问
-var _deltas := {}              # "cx,cz" -> {"index": block_id}，玩家改动的本地增量
+var _chunks := {}              # 指向 _data.chunks() 的同一引用 —— 复用现有所有读取
 var _delta_dirty := false
 var _discoveries := {}          # "x,y,z" -> true，已发现的世界地标
 var _journey_steps := {}        # 已完成的新手旅程步骤
@@ -73,7 +73,8 @@ func setup(block_lib: BlockLibrary, world_seed: int = 1337, save_file: String = 
 	lib = block_lib
 	_world_seed = world_seed
 	save_path = save_file
-	_gen = WorldGenerator.new(world_seed)
+	_data = WorldData.new(world_seed)
+	_chunks = _data.chunks()      # 同一字典引用：World 的读取/卸载继续用 _chunks，写入走 _data
 	_solid = lib.solid_lut; _opaque = lib.opaque_lut; _transp = lib.transp_lut; _water = lib.water_lut
 	_ttop = lib.tile_top_lut; _tside = lib.tile_side_lut; _tbot = lib.tile_bot_lut; _matbucket = lib.mat_bucket_lut
 	_max_inflight = maxi(4, OS.get_processor_count() - 1)
@@ -89,22 +90,17 @@ func chunk_of(wx: int, wz: int) -> Vector2i:
 	return Vector2i(floori(float(wx) / Chunk.SX), floori(float(wz) / Chunk.SZ))
 
 func surface_y(wx: int, wz: int) -> int:
-	return _gen.surface_height(wx, wz)
+	return _data.surface_y(wx, wz)
 
 func region_label(wx: int, wz: int) -> String:
-	return _gen.region_label(wx, wz)
+	return _data.region_label(wx, wz)
 
 func region_description(wx: int, wz: int) -> String:
-	return _gen.region_description(wx, wz)
+	return _data.region_description(wx, wz)
 
 # ---------- 读写方块 ----------
 func get_block(wx: int, wy: int, wz: int) -> int:
-	var cc := chunk_of(wx, wz)
-	if wy < 0 or wy >= Chunk.SY:
-		return 0
-	_ensure_data(cc)
-	var ch: Chunk = _chunks[cc]
-	return ch.get_block(wx - cc.x * Chunk.SX, wy, wz - cc.y * Chunk.SZ)
+	return _data.get_block(wx, wy, wz)
 
 func request_edit(wx: int, wy: int, wz: int, id: int) -> bool:
 	if wy < 0 or wy >= Chunk.SY:
@@ -182,26 +178,15 @@ func set_block(wx: int, wy: int, wz: int, id: int) -> bool:
 func set_block_data(wx: int, wy: int, wz: int, id: int, dirty: Dictionary) -> bool:
 	if wy < 0 or wy >= Chunk.SY:
 		return false
-	var cc := chunk_of(wx, wz)
-	if not _chunks.has(cc):
-		_ensure_data(cc)
-	var lx := wx - cc.x * Chunk.SX
-	var lz := wz - cc.y * Chunk.SZ
-	var ch: Chunk = _chunks[cc]
-	if ch.get_block(lx, wy, lz) == id:
+	var was_light := _is_light_block(_data.get_block(wx, wy, wz))   # 读旧值（判灯光）
+	var affected: Array = _data.apply_edit_local(wx, wy, wz, id)    # 数据层权威写入 + 记增量 + revision
+	if affected.is_empty():
 		return false
-	var was_light := _is_light_block(int(ch.get_block(lx, wy, lz)))
-	ch.set_block(lx, wy, lz, id)
-	_record_delta(cc, lx, wy, lz, id)
-	dirty[cc] = true
-	# 跨区块边界：邻块的网格也需要重建（剔除面会变）
-	if lx == 0: dirty[cc + Vector2i(-1, 0)] = true
-	elif lx == Chunk.SX - 1: dirty[cc + Vector2i(1, 0)] = true
-	if lz == 0: dirty[cc + Vector2i(0, -1)] = true
-	elif lz == Chunk.SZ - 1: dirty[cc + Vector2i(0, 1)] = true
-	# 若本格涉及发光方块（增/删），标记该块需要刷新灯光
+	_delta_dirty = true
+	for c in affected:                                             # 本块 + 跨界邻块都标记重建
+		dirty[c] = true
 	if was_light or _is_light_block(id):
-		_light_dirty[cc] = true
+		_light_dirty[chunk_of(wx, wz)] = true
 	return true
 
 # 重建一批脏区块。在场景树内 -> 走后台线程（主线程只 assemble，不冻结）；
@@ -317,15 +302,7 @@ func _block_label(id: int) -> String:
 
 # ---------- 数据生成 ----------
 func _ensure_data(cc: Vector2i) -> void:
-	if _chunks.has(cc):
-		return
-	var ch := Chunk.new(cc.x, cc.y)
-	_gen.generate(ch)
-	# 程序化基线快照（套用增量之前）—— _record_delta 用它做 O(1) 比较，省去每格整块重生。
-	# 运行期缓存，不写存档。
-	ch.base_blocks = ch.blocks.duplicate()
-	_apply_deltas_to_chunk(cc, ch)
-	_chunks[cc] = ch
+	_data.ensure_data(cc)   # 生成 + base 快照 + 套增量都在 WorldData；_chunks 为同一引用，随之填充
 
 func _chunk_key(cc: Vector2i) -> String:
 	return "%d,%d" % [cc.x, cc.y]
@@ -343,63 +320,20 @@ func _world_pos_from_chunk_index(cc: Vector2i, idx: int) -> Vector3i:
 	var y := int(yz / Chunk.SZ)
 	return Vector3i(cc.x * Chunk.SX + lx, y, cc.y * Chunk.SZ + lz)
 
-func _base_block(cc: Vector2i, lx: int, wy: int, lz: int) -> int:
-	# 优先用 _ensure_data 存下的基线快照做 O(1) 查表。
-	if _chunks.has(cc):
-		var ch: Chunk = _chunks[cc]
-		var idx := Chunk.index(lx, wy, lz)
-		if idx >= 0 and idx < ch.base_blocks.size():
-			return ch.base_blocks[idx]
-	# 兜底：快照缺失（极少见，例如外部直接塞进来的 chunk）才整块重生。
-	var base := Chunk.new(cc.x, cc.y)
-	_gen.generate(base)
-	return base.get_block(lx, wy, lz)
-
-func _record_delta(cc: Vector2i, lx: int, wy: int, lz: int, id: int) -> void:
-	var idx := Chunk.index(lx, wy, lz)
-	var key := _chunk_key(cc)
-	var base_id := _base_block(cc, lx, wy, lz)
-	if id == base_id:
-		if _deltas.has(key):
-			var edits: Dictionary = _deltas[key]
-			if edits.erase(str(idx)):
-				_delta_dirty = true
-				if edits.is_empty():
-					_deltas.erase(key)
-		return
-	if not _deltas.has(key):
-		_deltas[key] = {}
-	var chunk_edits: Dictionary = _deltas[key]
-	chunk_edits[str(idx)] = id
-	_delta_dirty = true
-
-func _apply_deltas_to_chunk(cc: Vector2i, chunk: Chunk) -> void:
-	var key := _chunk_key(cc)
-	if not _deltas.has(key):
-		return
-	var edits: Dictionary = _deltas[key]
-	for idx_key in edits.keys():
-		var idx := int(idx_key)
-		if idx >= 0 and idx < chunk.blocks.size():
-			chunk.blocks[idx] = int(edits[idx_key])
-			chunk.dirty = true
+# 数据层增量逻辑（_base_block / _record_delta / _apply_deltas_to_chunk）已迁入 WorldData。
 
 func edit_count() -> int:
-	var n := 0
-	for key in _deltas.keys():
-		var edits: Dictionary = _deltas[key]
-		n += edits.size()
-	return n
+	return _data.edit_count()
 
 func edited_blocks_near(pos: Vector3i, radius: int = LANDMARK_RESTORE_RADIUS, vertical_radius: int = LANDMARK_RESTORE_VERTICAL_RADIUS) -> int:
 	var count := 0
-	for key in _deltas.keys():
+	for key in _data.deltas_ref().keys():
 		var cc := _chunk_from_key(str(key))
 		if abs(cc.x * Chunk.SX - pos.x) > radius + Chunk.SX and abs((cc.x + 1) * Chunk.SX - pos.x) > radius:
 			continue
 		if abs(cc.y * Chunk.SZ - pos.z) > radius + Chunk.SZ and abs((cc.y + 1) * Chunk.SZ - pos.z) > radius:
 			continue
-		var edits: Dictionary = _deltas[key]
+		var edits: Dictionary = _data.deltas_ref()[key]
 		for idx_key in edits.keys():
 			var block_id := int(edits[idx_key])
 			if block_id == BlockLibrary.AIR or (lib != null and not lib.is_renderable(block_id)):
@@ -541,7 +475,7 @@ func load_world() -> bool:
 	var data: Dictionary = loaded["data"]
 	var loaded_from_backup := bool(loaded.get("from_backup", false))
 	cover_path = String(data.get("cover_path", ""))
-	_deltas.clear()
+	var loaded_deltas := {}
 	_discoveries.clear()
 	_journey_steps.clear()
 	_visited_regions.clear()
@@ -558,7 +492,8 @@ func load_world() -> bool:
 			for idx_key in raw_edits.keys():
 				clean[str(idx_key)] = int(raw_edits[idx_key])
 			if not clean.is_empty():
-				_deltas[str(key)] = clean
+				loaded_deltas[str(key)] = clean
+	_data.load_deltas(loaded_deltas)
 	var discoveries_raw: Variant = data.get("discoveries", [])
 	if typeof(discoveries_raw) == TYPE_ARRAY:
 		for raw in discoveries_raw:
@@ -610,7 +545,7 @@ func save_world(force: bool = false) -> bool:
 		"region_count": region_count(),
 		"region_total": region_total(),
 		"visited_regions": visited_regions(),
-		"edits": _deltas,
+		"edits": _data.all_deltas(),
 		"discoveries": discovery_keys(),
 	}
 	if not _write_save_text(JSON.stringify(data, "\t")):

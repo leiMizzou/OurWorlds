@@ -92,6 +92,10 @@ func chunk_delta(cc: Vector2i) -> Dictionary:
 func all_deltas() -> Dictionary:
 	return _deltas.duplicate(true)
 
+# 只读引用（不复制）—— 供 World 地标查询热路径迭代；调用方不得修改。
+func deltas_ref() -> Dictionary:
+	return _deltas
+
 func load_deltas(d: Dictionary) -> void:
 	_deltas = d.duplicate(true)
 	_chunks.clear()          # 强制重载时按 seed 重生 + 重套新增量
