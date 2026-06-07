@@ -21,6 +21,7 @@ import net from "node:net";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { connectRemote, type RemoteClient, type RemoteEnvelope } from "./transport-remote.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -32,6 +33,17 @@ const PORT = (() => {
   const n = raw ? Number.parseInt(raw, 10) : NaN;
   return Number.isFinite(n) && n > 0 ? n : 8970;
 })();
+
+/**
+ * Remote WebSocket transport config.
+ * When OW_REMOTE_URL is set we dial a WebSocket instead of TCP.
+ * e.g. OW_REMOTE_URL=wss://play.ourworlds.app/agent
+ *      OW_AGENT_TOKEN=<token>
+ *      OW_AGENT_NAME=MyBot   (optional)
+ */
+const OW_REMOTE_URL = process.env.OW_REMOTE_URL ?? "";
+const OW_AGENT_TOKEN = process.env.OW_AGENT_TOKEN ?? "";
+const OW_AGENT_NAME = process.env.OW_AGENT_NAME;
 
 /** How long to wait for a single tool's response line from the game. */
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -258,7 +270,35 @@ function decorateConnectError(
   return new Error(`error connecting to ${host}:${port}: ${err.message}`);
 }
 
-const game = new GameClient(HOST, PORT);
+// ---------------------------------------------------------------------------
+// Active transport (TCP or WebSocket, resolved at startup)
+// ---------------------------------------------------------------------------
+
+/**
+ * Unified call interface shared by both transports.
+ * `GameClient.request` and `RemoteClient.call` have the same signature once
+ * we wrap GameClient with this adapter.
+ */
+interface Transport {
+  call(tool: string, args: Record<string, unknown>): Promise<GameResponse | RemoteEnvelope>;
+}
+
+class TcpTransport implements Transport {
+  private readonly client: GameClient;
+  constructor(host: string, port: number) {
+    this.client = new GameClient(host, port);
+  }
+  call(tool: string, args: Record<string, unknown>): Promise<GameResponse> {
+    return this.client.request(tool, args);
+  }
+}
+
+/**
+ * Resolved lazily at first use so MCP startup is not blocked by connect.
+ * For the TCP path this is fine (GameClient already connects lazily).
+ * For the WS path we need to await connectRemote — we do that in main().
+ */
+let transport: Transport;
 
 // ---------------------------------------------------------------------------
 // MCP server
@@ -286,9 +326,9 @@ type ToolResult = {
  *   both as JSON text and as structuredContent so the LLM can read fields.
  */
 async function forward(tool: string, args: Record<string, unknown>): Promise<ToolResult> {
-  let resp: GameResponse;
+  let resp: GameResponse | RemoteEnvelope;
   try {
-    resp = await game.request(tool, args);
+    resp = await transport.call(tool, args);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
@@ -638,11 +678,30 @@ function stripUndefined(obj: Record<string, unknown>): Record<string, unknown> {
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  // Set up the active game transport (TCP or WebSocket).
+  if (OW_REMOTE_URL) {
+    if (!OW_AGENT_TOKEN) {
+      log("WARNING: OW_REMOTE_URL is set but OW_AGENT_TOKEN is empty — auth will likely fail.");
+    }
+    log(`remote WebSocket transport: ${OW_REMOTE_URL}`);
+    const remote: RemoteClient = await connectRemote(OW_REMOTE_URL, OW_AGENT_TOKEN, OW_AGENT_NAME);
+    transport = {
+      call(tool: string, args: Record<string, unknown>) {
+        return remote.call(tool, args);
+      },
+    };
+    log(`connected & authenticated to ${OW_REMOTE_URL}`);
+  } else {
+    log(`TCP transport: ${HOST}:${PORT} (set OW_AGENT_PORT to override, OW_REMOTE_URL for WebSocket).`);
+    transport = new TcpTransport(HOST, PORT);
+  }
+
+  const stdioTransport = new StdioServerTransport();
+  await server.connect(stdioTransport);
   log(
-    `MCP server ready on STDIO. Forwarding to OurWorlds at ${HOST}:${PORT} ` +
-      `(set OW_AGENT_PORT to override).`,
+    OW_REMOTE_URL
+      ? `MCP server ready on STDIO. Forwarding to OurWorlds at ${OW_REMOTE_URL}.`
+      : `MCP server ready on STDIO. Forwarding to OurWorlds at ${HOST}:${PORT}.`,
   );
 }
 
