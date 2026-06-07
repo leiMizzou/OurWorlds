@@ -27,10 +27,12 @@ if not os.path.isdir(WEB_DIR):
     print("未找到 build/web —— 先跑 `bash packaging/build_web.sh` 导出 Web 版。")
     sys.exit(1)
 
-class _ReusableTCPServer(socketserver.TCPServer):
-    # 重启时旧监听套接字可能仍处于 TIME_WAIT，未设 SO_REUSEADDR 会导致 Errno 48 绑定失败、
-    # 服务在 launchd 下反复重启抢不到端口。设 allow_reuse_address 让重启即时重绑。
+class _ReusableTCPServer(socketserver.ThreadingTCPServer):
+    # ThreadingTCPServer：每个请求一个线程，可并发服务多个资源。单线程服务器在慢速隧道上
+    # 串行传 35MB WASM 时会阻塞其它并发请求 → 浏览器并行拉取的 index.js/图标超时(503/524) → 卡死打不开。
+    # allow_reuse_address：重启时旧端口处于 TIME_WAIT 也能立即重绑（避免 Errno 48 反复重启抢不到端口）。
     allow_reuse_address = True
+    daemon_threads = True
 
 
 with _ReusableTCPServer(("127.0.0.1", PORT), CrossOriginIsolatedHandler) as httpd:

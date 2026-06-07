@@ -284,6 +284,11 @@ func start_server(port: int) -> int:
 	if mode == Mode.OFFLINE:
 		mode = Mode.SERVER          # 默认作为权威服务器；HOST 已先设好 HOST，不覆盖
 	var peer := WebSocketMultiplayerPeer.new()
+	# 大缓冲：欢迎包(全量世界增量)+ 15Hz 快照会在客户端慢加载/网格化期间堆积；
+	# 默认 64KB 缓冲会溢出（"Buffer payload full! Dropping data."）→ 世界同步失败/灰屏。
+	peer.inbound_buffer_size = 16 * 1024 * 1024
+	peer.outbound_buffer_size = 16 * 1024 * 1024
+	peer.max_queued_packets = 16384
 	var err := peer.create_server(port)
 	if err != OK:
 		push_warning("联机服务器监听失败 :%d (err=%d)" % [port, err])
@@ -297,6 +302,10 @@ func start_server(port: int) -> int:
 func start_client(url: String) -> int:
 	mode = Mode.CLIENT
 	var peer := WebSocketMultiplayerPeer.new()
+	# 见 start_server：客户端入站缓冲必须够大，否则慢加载期间欢迎+快照堆积溢出 → 灰屏。
+	peer.inbound_buffer_size = 16 * 1024 * 1024
+	peer.outbound_buffer_size = 16 * 1024 * 1024
+	peer.max_queued_packets = 16384
 	var err := peer.create_client(url)
 	if err != OK:
 		push_warning("联机连接失败 %s (err=%d)" % [url, err])
