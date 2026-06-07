@@ -31,6 +31,8 @@ const WorldData = preload("res://scripts/WorldData.gd")
 const NetMenu = preload("res://scripts/NetMenu.gd")
 const NakamaClient = preload("res://scripts/NakamaClient.gd")
 const LoginScreen = preload("res://scripts/LoginScreen.gd")
+const AgentGateway = preload("res://scripts/AgentGateway.gd")
+const AgentTokenStore = preload("res://scripts/AgentTokenStore.gd")
 
 const DAY_LEN := 180.0   # 一个昼夜 180 秒
 const AUTO_SAVE_INTERVAL := 18.0
@@ -429,6 +431,20 @@ func _start_dedicated_server() -> void:
 		print_verbose("已载入服务器世界存档：%s" % net_manager.world_save_path)
 	add_child(net_manager)
 	net_manager.start_server(_net_port())
+	# 远程代理网关（Agent Gateway）：仅当显式设置端口时启动；权威世界此刻已就绪（set_authority_data 已调）。
+	if OS.has_environment("OW_AGENT_GATEWAY_PORT"):
+		var gw_port := int(OS.get_environment("OW_AGENT_GATEWAY_PORT"))
+		var max_agents := int(OS.get_environment("OW_AGENT_MAX")) if OS.has_environment("OW_AGENT_MAX") else 8
+		var gw_rate := int(OS.get_environment("OW_AGENT_RATE")) if OS.has_environment("OW_AGENT_RATE") else 30
+		var tokens := AgentTokenStore.new(OS.get_environment("OW_AGENT_TOKENS") if OS.has_environment("OW_AGENT_TOKENS") else "")
+		var gw := AgentGateway.new()
+		gw.name = "AgentGateway"
+		gw.setup(net_manager, data, tokens, max_agents, gw_rate)
+		add_child(gw)   # 加入场景树，gw._process 才会驱动套接字循环
+		if gw.start(gw_port):
+			print("[server] AgentGateway listening on 127.0.0.1:%d (max %d, rate %d/s, %d tokens)" % [gw_port, max_agents, gw_rate, tokens.count()])
+		else:
+			printerr("[server] AgentGateway failed to bind port ", gw_port)
 
 func _server_save_path() -> String:
 	if OS.has_environment("VC_NO_SAVE"):
