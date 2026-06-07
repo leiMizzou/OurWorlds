@@ -136,6 +136,12 @@ func _ready() -> void:
 			_fallbacks.append(_emoji_font)
 		_ui_font.fallbacks = _fallbacks
 	_settings = GameSettings.load_settings()
+	# i18n：在任何 UI 构建之前确定界面语言（落盘值优先，否则跟随 OS）。
+	# 经节点路径取自动加载单例（而非裸标识符 `Locale`）—— 这样 Main.gd 被其它脚本
+	# preload 编译时不会产生对 autoload 全局名的解析依赖（避免 --script 下编译/卡死）。
+	var _locale := get_node_or_null("/root/Locale")
+	if _locale != null:
+		_locale.init(str(_settings.get("language", "")))
 	_graphics_quality = _sanitize_graphics_quality(str(_settings.get("graphics_quality", "balanced")))
 	lib = BlockLibrary.new()
 	_setup_environment()

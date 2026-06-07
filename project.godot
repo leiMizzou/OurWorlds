@@ -10,6 +10,10 @@ run/main_scene="res://scenes/Main.tscn"
 config/icon="res://icon.png"
 config/features=PackedStringArray("4.6", "Forward Plus")
 
+[autoload]
+
+Locale="*res://scripts/Locale.gd"
+
 [display]
 
 window/size/viewport_width=1280

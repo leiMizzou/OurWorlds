@@ -14,6 +14,7 @@ const DEFAULTS := {
 	"graphics_quality": "balanced",
 	"fullscreen": false,
 	"resolution": "1280x720",
+	"language": "",
 }
 
 static func settings_path() -> String:
@@ -65,6 +66,7 @@ static func sanitize(settings: Dictionary) -> Dictionary:
 	out["graphics_quality"] = _sanitize_graphics_quality(settings.get("graphics_quality", DEFAULTS["graphics_quality"]))
 	out["fullscreen"] = _to_bool(settings.get("fullscreen", DEFAULTS["fullscreen"]))
 	out["resolution"] = _sanitize_resolution(settings.get("resolution", DEFAULTS["resolution"]))
+	out["language"] = _sanitize_language(settings.get("language", DEFAULTS["language"]))
 	return out
 
 # 宽松布尔解析：兼容手改 settings.json 里写成字符串/数字的情况。
@@ -104,6 +106,14 @@ static func _sanitize_resolution(value: Variant) -> String:
 	if RESOLUTIONS.has(id):
 		return id
 	return str(DEFAULTS["resolution"])
+
+# 界面语言：合法值 "zh"/"en"；"" 表示“跟随 OS / 未选择”（由 Locale.init 决定实际语言）。
+# 其它任意值一律归一为 ""，避免脏值卡死语言初始化。
+static func _sanitize_language(value: Variant) -> String:
+	var id := str(value)
+	if id == "zh" or id == "en":
+		return id
+	return ""
 
 # 把 "1280x720" 解析成 Vector2i，供后续窗口设置应用使用（非法时回退到默认分辨率）。
 static func resolution_size(value: Variant) -> Vector2i:

@@ -2,6 +2,9 @@ extends CanvasLayer
 # 暂停菜单：继续、保存、视距、音量和鼠标灵敏度，外加显示/全屏/分辨率与操作说明。只在暂停时接管鼠标。
 
 const GameSettings = preload("res://scripts/GameSettings.gd")
+# i18n：Locale 是自动加载单例（见 project.godot [autoload]）。
+# 本脚本经 _loc()（/root/Locale 节点路径）访问它，而不是裸标识符 `Locale` ——
+# 因为 GDScript 在 `godot --script` 编译被 preload 的脚本时不会注入 autoload 全局名。
 
 signal resume_requested
 signal save_requested
@@ -40,7 +43,21 @@ var _quality_option: OptionButton
 var _fullscreen_check: CheckBox
 var _resolution_option: OptionButton
 var _weather_check: CheckBox
+var _language_option: OptionButton
 var _controls_overlay: Control      # “操作说明”浮层（覆盖在面板之上）
+# i18n：需在切换语言时重译的标签/控件引用（_retranslate 逐项重设文案）。
+var _brand_title_label: Label
+var _summary_section_title: Label
+var _settings_title_label: Label
+var _display_title_label: Label
+var _quality_label: Label
+var _language_label: Label
+var _resolution_label: Label
+var _controls_title_label: Label
+var _controls_close_button: Button
+var _controls_hint_label: Label
+var _controls_action_labels := []   # [{ "label": Label, "key": "CONTROLS_..." }]
+var _loc_cached: Node               # 缓存的 Locale 自动加载单例（经 /root/Locale 取，见 _loc()）
 const VIEW_RADIUS_MIN := 2
 const VIEW_RADIUS_MAX := 6
 var _view_radius := 4
@@ -107,6 +124,22 @@ func set_world_summary(data: Dictionary) -> void:
 	_summary_data = data.duplicate()
 	_refresh_summary()
 
+# 经节点路径取 Locale 自动加载单例（不要用裸标识符 `Locale`）：
+# GDScript 在 `godot --script` 编译被 preload 的脚本时不会注入 autoload 全局名，
+# 裸引用会报 “Identifier not found: Locale” 并使依赖该脚本的纯逻辑测试编译失败。
+# 运行期 /root/Locale 一定存在；用一个安全垫片，万一缺失也只是退化为返回 key。
+func _loc() -> Node:
+	if _loc_cached != null and is_instance_valid(_loc_cached):
+		return _loc_cached
+	var tree := get_tree()
+	if tree != null and tree.root != null:
+		_loc_cached = tree.root.get_node_or_null("Locale")
+	if _loc_cached == null:
+		# 极端兜底（理论上不会发生）：用脚本实例临时顶上，保证不崩。
+		_loc_cached = (load("res://scripts/Locale.gd") as GDScript).new()
+		_loc_cached.call("load_strings")
+	return _loc_cached
+
 func _build() -> void:
 	var root := Control.new()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -146,15 +179,15 @@ func _build() -> void:
 	box.add_theme_constant_override("separation", 12)
 	margin.add_child(box)
 
-	var title := Label.new()
-	title.text = "OurWorlds"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 28)
-	title.modulate = Color(1, 1, 1, 0.96)
-	box.add_child(title)
+	_brand_title_label = Label.new()
+	_brand_title_label.text = _loc().t("PAUSE_TITLE")
+	_brand_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_brand_title_label.add_theme_font_size_override("font_size", 28)
+	_brand_title_label.modulate = Color(1, 1, 1, 0.96)
+	box.add_child(_brand_title_label)
 
 	_subtitle_label = Label.new()
-	_subtitle_label.text = "已暂停"
+	_subtitle_label.text = _loc().t("PAUSE_SUBTITLE_PAUSED")
 	_subtitle_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_subtitle_label.add_theme_font_size_override("font_size", 15)
 	_subtitle_label.modulate = Color(0.82, 0.90, 0.96, 0.78)
@@ -184,66 +217,71 @@ func _build() -> void:
 	_left_buttons.add_theme_constant_override("separation", 10)
 	left.add_child(_left_buttons)
 
-	_resume_button = _nav_button("继续")
-	_resume_button.tooltip_text = "返回游戏（Esc）"
+	_resume_button = _nav_button(_loc().t("PAUSE_RESUME"))
+	_resume_button.tooltip_text = _loc().t("PAUSE_RESUME_TOOLTIP")
 	_resume_button.pressed.connect(func(): resume_requested.emit())
 	_left_buttons.add_child(_resume_button)
 
-	_save_button = _nav_button("保存世界")
-	_save_button.tooltip_text = "把当前世界写入本地存档"
+	_save_button = _nav_button(_loc().t("PAUSE_SAVE_WORLD"))
+	_save_button.tooltip_text = _loc().t("PAUSE_SAVE_TOOLTIP")
 	_save_button.pressed.connect(func(): save_requested.emit())
 	_left_buttons.add_child(_save_button)
 
-	_palette_button = _nav_button("材料库")
-	_palette_button.tooltip_text = "浏览全部可放置方块（E）"
+	_palette_button = _nav_button(_loc().t("PAUSE_PALETTE"))
+	_palette_button.tooltip_text = _loc().t("PAUSE_PALETTE_TOOLTIP")
 	_palette_button.pressed.connect(func(): palette_requested.emit())
 	_left_buttons.add_child(_palette_button)
 
-	_journal_button = _nav_button("旅行手记")
-	_journal_button.tooltip_text = "查看世界印记与旅程进度（J）"
+	_journal_button = _nav_button(_loc().t("PAUSE_JOURNAL"))
+	_journal_button.tooltip_text = _loc().t("PAUSE_JOURNAL_TOOLTIP")
 	_journal_button.pressed.connect(func(): journal_requested.emit())
 	_left_buttons.add_child(_journal_button)
 
-	_map_button = _nav_button("世界地图")
-	_map_button.tooltip_text = "打开周边地貌与遗迹地图（M）"
+	_map_button = _nav_button(_loc().t("PAUSE_MAP"))
+	_map_button.tooltip_text = _loc().t("PAUSE_MAP_TOOLTIP")
 	_map_button.pressed.connect(func(): map_requested.emit())
 	_left_buttons.add_child(_map_button)
 
-	_controls_button = _nav_button("操作说明")
-	_controls_button.tooltip_text = "查看全部键位与操作"
+	_controls_button = _nav_button(_loc().t("PAUSE_CONTROLS"))
+	_controls_button.tooltip_text = _loc().t("PAUSE_CONTROLS_TOOLTIP")
 	_controls_button.pressed.connect(_toggle_controls_overlay)
 	_left_buttons.add_child(_controls_button)
 
-	_title_button = _nav_button("返回标题")
-	_title_button.tooltip_text = "回到首屏世界选择"
+	_title_button = _nav_button(_loc().t("PAUSE_BACK_TO_TITLE"))
+	_title_button.tooltip_text = _loc().t("PAUSE_BACK_TO_TITLE_TOOLTIP")
 	_title_button.pressed.connect(func(): title_requested.emit())
 	_left_buttons.add_child(_title_button)
 
-	var settings_title := Label.new()
-	settings_title.text = "设置"
-	settings_title.add_theme_font_size_override("font_size", 13)
-	settings_title.modulate = Color(1.0, 0.92, 0.70, 0.86)
-	right.add_child(settings_title)
+	_settings_title_label = Label.new()
+	_settings_title_label.text = _loc().t("SETTINGS_TITLE")
+	_settings_title_label.add_theme_font_size_override("font_size", 13)
+	_settings_title_label.modulate = Color(1.0, 0.92, 0.70, 0.86)
+	right.add_child(_settings_title_label)
 	right.add_child(_view_radius_row())
 	right.add_child(_quality_row())
-	right.add_child(_slider_row("音量", _volume, _on_volume_changed))
-	right.add_child(_slider_row("灵敏度", _sensitivity, _on_sensitivity_changed))
+	right.add_child(_slider_row("SETTINGS_VOLUME", _volume, _on_volume_changed))
+	right.add_child(_slider_row("SETTINGS_SENSITIVITY", _sensitivity, _on_sensitivity_changed))
 	right.add_child(_weather_toggle())
+	right.add_child(_language_row())
 
-	var display_title := Label.new()
-	display_title.text = "显示"
-	display_title.add_theme_font_size_override("font_size", 13)
-	display_title.modulate = Color(1.0, 0.92, 0.70, 0.86)
-	right.add_child(display_title)
+	_display_title_label = Label.new()
+	_display_title_label.text = _loc().t("DISPLAY_TITLE")
+	_display_title_label.add_theme_font_size_override("font_size", 13)
+	_display_title_label.modulate = Color(1.0, 0.92, 0.70, 0.86)
+	right.add_child(_display_title_label)
 	right.add_child(_fullscreen_row())
 	right.add_child(_resolution_row())
 
 	_build_controls_overlay(root)
 
 	_refresh_labels()
+	_retranslate()
 	_refresh_mode()
 	_refresh_summary()
 	_sync_display_controls()
+	# 语言切换时即时重译（暂停菜单打开期间切换也能立刻生效）。
+	if not _loc().language_changed.is_connected(_retranslate):
+		_loc().language_changed.connect(_retranslate)
 
 func _button(text: String) -> Button:
 	var b := Button.new()
@@ -325,11 +363,11 @@ func _summary_section() -> Control:
 	_summary_box = VBoxContainer.new()
 	_summary_box.add_theme_constant_override("separation", 4)
 
-	var title := Label.new()
-	title.text = "当前世界"
-	title.add_theme_font_size_override("font_size", 13)
-	title.modulate = Color(1.0, 0.92, 0.70, 0.86)
-	_summary_box.add_child(title)
+	_summary_section_title = Label.new()
+	_summary_section_title.text = _loc().t("SUMMARY_CURRENT_WORLD")
+	_summary_section_title.add_theme_font_size_override("font_size", 13)
+	_summary_section_title.modulate = Color(1.0, 0.92, 0.70, 0.86)
+	_summary_box.add_child(_summary_section_title)
 
 	_world_summary_label = _summary_label(Color(0.93, 0.98, 1.0, 0.90))
 	_summary_box.add_child(_world_summary_label)
@@ -407,22 +445,24 @@ func _view_radius_row() -> Control:
 	row.add_child(plus)
 	return row
 
-func _slider_row(label: String, value: float, callback: Callable) -> Control:
+# label_key 既是 i18n key 也是音量/灵敏度的判别依据（文案最终由 _refresh_labels 带数值重写）。
+func _slider_row(label_key: String, value: float, callback: Callable) -> Control:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 4)
 
+	var is_volume := label_key == "SETTINGS_VOLUME"
 	var text := Label.new()
 	text.add_theme_font_size_override("font_size", 14)
 	text.modulate = Color(0.9, 0.95, 1.0, 0.86)
 	box.add_child(text)
-	if label == "音量":
+	if is_volume:
 		_volume_label = text
 	else:
 		_sensitivity_label = text
 
 	var slider := HSlider.new()
-	slider.min_value = 0.0 if label == "音量" else 0.2
-	slider.max_value = 1.0 if label == "音量" else 1.6
+	slider.min_value = 0.0 if is_volume else 0.2
+	slider.max_value = 1.0 if is_volume else 1.6
 	slider.step = 0.05
 	slider.value = value
 	slider.custom_minimum_size = Vector2(0, 30)
@@ -434,22 +474,22 @@ func _quality_row() -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 
-	var label := Label.new()
-	label.text = "画质"
-	label.custom_minimum_size = Vector2(180, 32)
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.add_theme_font_size_override("font_size", 14)
-	label.modulate = Color(0.9, 0.95, 1.0, 0.86)
-	row.add_child(label)
+	_quality_label = Label.new()
+	_quality_label.text = _loc().t("SETTINGS_QUALITY")
+	_quality_label.custom_minimum_size = Vector2(180, 32)
+	_quality_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_quality_label.add_theme_font_size_override("font_size", 14)
+	_quality_label.modulate = Color(0.9, 0.95, 1.0, 0.86)
+	row.add_child(_quality_label)
 
 	_quality_option = OptionButton.new()
 	_quality_option.focus_mode = Control.FOCUS_NONE
 	_quality_option.custom_minimum_size = Vector2(116, 34)
-	_quality_option.add_item("性能")
+	_quality_option.add_item(_loc().t("SETTINGS_QUALITY_PERFORMANCE"))
 	_quality_option.set_item_metadata(0, "performance")
-	_quality_option.add_item("均衡")
+	_quality_option.add_item(_loc().t("SETTINGS_QUALITY_BALANCED"))
 	_quality_option.set_item_metadata(1, "balanced")
-	_quality_option.add_item("精美")
+	_quality_option.add_item(_loc().t("SETTINGS_QUALITY_CINEMATIC"))
 	_quality_option.set_item_metadata(2, "cinematic")
 	_quality_option.select(_quality_index(_graphics_quality))
 	_quality_option.item_selected.connect(_on_quality_selected)
@@ -473,22 +513,56 @@ func _separator() -> Control:
 
 func _weather_toggle() -> Control:
 	_weather_check = CheckBox.new()
-	_weather_check.text = "动态天气"
+	_weather_check.text = _loc().t("SETTINGS_WEATHER")
 	_weather_check.button_pressed = _weather_enabled
 	_weather_check.focus_mode = Control.FOCUS_NONE
-	_weather_check.tooltip_text = "开启后世界会随机出现降雨等天气"
+	_weather_check.tooltip_text = _loc().t("SETTINGS_WEATHER_TOOLTIP")
 	_weather_check.add_theme_font_size_override("font_size", 14)
 	_weather_check.toggled.connect(_on_weather_toggled)
 	return _weather_check
+
+# 语言切换：中文 / English 下拉，元数据存语言码（zh/en），选中即切换并落盘。
+func _language_row() -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+
+	_language_label = Label.new()
+	_language_label.text = _loc().t("SETTINGS_LANGUAGE")
+	_language_label.custom_minimum_size = Vector2(180, 32)
+	_language_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_language_label.add_theme_font_size_override("font_size", 14)
+	_language_label.modulate = Color(0.9, 0.95, 1.0, 0.86)
+	row.add_child(_language_label)
+
+	_language_option = OptionButton.new()
+	_language_option.focus_mode = Control.FOCUS_NONE
+	_language_option.custom_minimum_size = Vector2(116, 34)
+	_language_option.tooltip_text = _loc().t("SETTINGS_LANGUAGE_TOOLTIP")
+	_language_option.add_item(_loc().t("LANG_ZH"))
+	_language_option.set_item_metadata(0, "zh")
+	_language_option.add_item(_loc().t("LANG_EN"))
+	_language_option.set_item_metadata(1, "en")
+	_language_option.select(_language_index(_loc().current()))
+	_language_option.item_selected.connect(_on_language_selected)
+	row.add_child(_language_option)
+	return row
+
+func _language_index(lang: String) -> int:
+	return 1 if lang == "en" else 0
+
+func _on_language_selected(index: int) -> void:
+	if _language_option == null:
+		return
+	_loc().set_language(str(_language_option.get_item_metadata(index)))
 
 # ---- 显示：全屏开关 + 分辨率下拉（商用必备）----
 
 func _fullscreen_row() -> Control:
 	_fullscreen_check = CheckBox.new()
-	_fullscreen_check.text = "全屏"
+	_fullscreen_check.text = _loc().t("DISPLAY_FULLSCREEN")
 	_fullscreen_check.button_pressed = _fullscreen
 	_fullscreen_check.focus_mode = Control.FOCUS_NONE
-	_fullscreen_check.tooltip_text = "在全屏与窗口模式之间切换"
+	_fullscreen_check.tooltip_text = _loc().t("DISPLAY_FULLSCREEN_TOOLTIP")
 	_fullscreen_check.add_theme_font_size_override("font_size", 14)
 	_fullscreen_check.toggled.connect(_on_fullscreen_toggled)
 	return _fullscreen_check
@@ -497,18 +571,18 @@ func _resolution_row() -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 
-	var label := Label.new()
-	label.text = "分辨率"
-	label.custom_minimum_size = Vector2(180, 32)
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.add_theme_font_size_override("font_size", 14)
-	label.modulate = Color(0.9, 0.95, 1.0, 0.86)
-	row.add_child(label)
+	_resolution_label = Label.new()
+	_resolution_label.text = _loc().t("DISPLAY_RESOLUTION")
+	_resolution_label.custom_minimum_size = Vector2(180, 32)
+	_resolution_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_resolution_label.add_theme_font_size_override("font_size", 14)
+	_resolution_label.modulate = Color(0.9, 0.95, 1.0, 0.86)
+	row.add_child(_resolution_label)
 
 	_resolution_option = OptionButton.new()
 	_resolution_option.focus_mode = Control.FOCUS_NONE
 	_resolution_option.custom_minimum_size = Vector2(140, 34)
-	_resolution_option.tooltip_text = "窗口模式下的窗口尺寸（全屏时跟随显示器）"
+	_resolution_option.tooltip_text = _loc().t("DISPLAY_RESOLUTION_TOOLTIP")
 	for i in range(GameSettings.RESOLUTIONS.size()):
 		var value := String(GameSettings.RESOLUTIONS[i])
 		_resolution_option.add_item(value)
@@ -609,29 +683,30 @@ func _sanitize_quality(value: String) -> String:
 
 # ============ 操作说明浮层（两列键位表，键位对齐 DESIGN 操作表）============
 
-# 左右两列键位：[操作, 键]。覆盖移动/视角/挖放/材料库/模板/撤销/手记/地图/拍照等。
+# 左右两列键位：[操作 key, 键位 key]（i18n key，运行时经 _loc().t 取双语文案）。
+# 覆盖移动/视角/挖放/材料库/模板/撤销/手记/地图/拍照等。
 const _CONTROLS_LEFT := [
-	["移动", "W A S D"],
-	["视角", "鼠标"],
-	["跳 / 跑", "空格 / Shift"],
-	["飞行切换", "双击空格"],
-	["飞行升 / 降", "空格 / Shift"],
-	["挖方块", "鼠标左键"],
-	["放方块", "鼠标右键"],
-	["选方块", "数字 1–8 / 滚轮"],
-	["最近材料", "R"],
+	["CONTROLS_MOVE", "CONTROLS_KEY_MOVE"],
+	["CONTROLS_LOOK", "CONTROLS_KEY_LOOK"],
+	["CONTROLS_JUMP_RUN", "CONTROLS_KEY_JUMP_RUN"],
+	["CONTROLS_FLY_TOGGLE", "CONTROLS_KEY_FLY_TOGGLE"],
+	["CONTROLS_FLY_UP_DOWN", "CONTROLS_KEY_JUMP_RUN"],
+	["CONTROLS_DIG", "CONTROLS_KEY_DIG"],
+	["CONTROLS_PLACE", "CONTROLS_KEY_PLACE"],
+	["CONTROLS_SELECT_BLOCK", "CONTROLS_KEY_SELECT_BLOCK"],
+	["CONTROLS_RECENT_MATERIAL", "CONTROLS_KEY_RECENT_MATERIAL"],
 ]
 const _CONTROLS_RIGHT := [
-	["材料库", "E"],
-	["建造画笔", "B"],
-	["模板 上一 / 下一", "Q / T"],
-	["旋转模板", "G"],
-	["撤销 / 重做", "Z / Y"],
-	["旅行手记", "J"],
-	["世界地图", "M"],
-	["拍照 / 截图", "F1 / F2"],
-	["切换视角", "V / F5"],
-	["暂停 / 抓放鼠标", "Esc"],
+	["CONTROLS_MATERIALS", "CONTROLS_KEY_MATERIALS"],
+	["CONTROLS_BUILD_BRUSH", "CONTROLS_KEY_BUILD_BRUSH"],
+	["CONTROLS_TEMPLATE_PREV_NEXT", "CONTROLS_KEY_TEMPLATE_PREV_NEXT"],
+	["CONTROLS_ROTATE_TEMPLATE", "CONTROLS_KEY_ROTATE_TEMPLATE"],
+	["CONTROLS_UNDO_REDO", "CONTROLS_KEY_UNDO_REDO"],
+	["CONTROLS_JOURNAL", "CONTROLS_KEY_JOURNAL"],
+	["CONTROLS_MAP", "CONTROLS_KEY_MAP"],
+	["CONTROLS_PHOTO", "CONTROLS_KEY_PHOTO"],
+	["CONTROLS_VIEW_SWITCH", "CONTROLS_KEY_VIEW_SWITCH"],
+	["CONTROLS_PAUSE_MOUSE", "CONTROLS_KEY_PAUSE_MOUSE"],
 ]
 
 func _build_controls_overlay(parent: Control) -> void:
@@ -675,19 +750,19 @@ func _build_controls_overlay(parent: Control) -> void:
 	header.add_theme_constant_override("separation", 10)
 	box.add_child(header)
 
-	var title := Label.new()
-	title.text = "操作说明"
-	title.add_theme_font_size_override("font_size", 26)
-	title.modulate = Color(1.0, 0.97, 0.86, 0.97)
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(title)
+	_controls_title_label = Label.new()
+	_controls_title_label.text = _loc().t("CONTROLS_TITLE")
+	_controls_title_label.add_theme_font_size_override("font_size", 26)
+	_controls_title_label.modulate = Color(1.0, 0.97, 0.86, 0.97)
+	_controls_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(_controls_title_label)
 
-	var close_button := _button("返回")
-	close_button.custom_minimum_size = Vector2(96, 36)
-	close_button.focus_mode = Control.FOCUS_ALL
-	close_button.name = "ControlsCloseButton"
-	close_button.pressed.connect(_hide_controls_overlay)
-	header.add_child(close_button)
+	_controls_close_button = _button(_loc().t("CONTROLS_BACK"))
+	_controls_close_button.custom_minimum_size = Vector2(96, 36)
+	_controls_close_button.focus_mode = Control.FOCUS_ALL
+	_controls_close_button.name = "ControlsCloseButton"
+	_controls_close_button.pressed.connect(_hide_controls_overlay)
+	header.add_child(_controls_close_button)
 
 	var columns := HBoxContainer.new()
 	columns.add_theme_constant_override("separation", 26)
@@ -696,12 +771,12 @@ func _build_controls_overlay(parent: Control) -> void:
 	columns.add_child(_controls_column(_CONTROLS_LEFT))
 	columns.add_child(_controls_column(_CONTROLS_RIGHT))
 
-	var hint := Label.new()
-	hint.text = "按 Esc 或点击空白处返回"
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.add_theme_font_size_override("font_size", 12)
-	hint.modulate = Color(0.80, 0.88, 0.96, 0.66)
-	box.add_child(hint)
+	_controls_hint_label = Label.new()
+	_controls_hint_label.text = _loc().t("CONTROLS_HINT")
+	_controls_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_controls_hint_label.add_theme_font_size_override("font_size", 12)
+	_controls_hint_label.modulate = Color(0.80, 0.88, 0.96, 0.66)
+	box.add_child(_controls_hint_label)
 
 func _controls_column(rows: Array) -> Control:
 	var col := VBoxContainer.new()
@@ -709,19 +784,22 @@ func _controls_column(rows: Array) -> Control:
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for raw in rows:
 		var entry: Array = raw
+		# entry = [操作 i18n key, 键位 i18n key]
 		col.add_child(_controls_row(String(entry[0]), String(entry[1])))
 	return col
 
-func _controls_row(action: String, key: String) -> Control:
+func _controls_row(action_key: String, key_key: String) -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
 
 	var action_label := Label.new()
-	action_label.text = action
+	action_label.text = _loc().t(action_key)
 	action_label.add_theme_font_size_override("font_size", 14)
 	action_label.modulate = Color(0.88, 0.94, 1.0, 0.88)
 	action_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(action_label)
+	# 登记到重译清单：语言切换时 _retranslate 会按 key 重设文案。
+	_controls_action_labels.append({"label": action_label, "key": action_key})
 
 	# 键位做成小胶囊，更像“键帽”，可读性更强。
 	var key_panel := PanelContainer.new()
@@ -733,12 +811,13 @@ func _controls_row(action: String, key: String) -> Control:
 	key_margin.add_theme_constant_override("margin_bottom", 2)
 	key_panel.add_child(key_margin)
 	var key_label := Label.new()
-	key_label.text = key
+	key_label.text = _loc().t(key_key)
 	key_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	key_label.add_theme_font_size_override("font_size", 13)
 	key_label.modulate = Color(1.0, 0.95, 0.80, 0.96)
 	key_margin.add_child(key_label)
 	row.add_child(key_panel)
+	_controls_action_labels.append({"label": key_label, "key": key_key})
 	return row
 
 func _toggle_controls_overlay() -> void:
@@ -776,13 +855,91 @@ func _on_controls_scrim_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		_hide_controls_overlay()
 
+# i18n：把全部静态文案按当前语言重设一遍。构建后调用一次，并接到
+# _loc().language_changed —— 暂停菜单打开期间切换语言也会立刻生效。
+func _retranslate() -> void:
+	if _brand_title_label != null:
+		_brand_title_label.text = _loc().t("PAUSE_TITLE")
+	# 左栏主功能按钮 + 提示（继续/返回标题随模式变化，交给 _refresh_mode）。
+	if _save_button != null:
+		_save_button.text = _loc().t("PAUSE_SAVE_WORLD")
+		_save_button.tooltip_text = _loc().t("PAUSE_SAVE_TOOLTIP")
+	if _palette_button != null:
+		_palette_button.text = _loc().t("PAUSE_PALETTE")
+		_palette_button.tooltip_text = _loc().t("PAUSE_PALETTE_TOOLTIP")
+	if _journal_button != null:
+		_journal_button.text = _loc().t("PAUSE_JOURNAL")
+		_journal_button.tooltip_text = _loc().t("PAUSE_JOURNAL_TOOLTIP")
+	if _map_button != null:
+		_map_button.text = _loc().t("PAUSE_MAP")
+		_map_button.tooltip_text = _loc().t("PAUSE_MAP_TOOLTIP")
+	if _controls_button != null:
+		_controls_button.text = _loc().t("PAUSE_CONTROLS")
+		_controls_button.tooltip_text = _loc().t("PAUSE_CONTROLS_TOOLTIP")
+	if _title_button != null:
+		_title_button.text = _loc().t("PAUSE_BACK_TO_TITLE")
+		_title_button.tooltip_text = _loc().t("PAUSE_BACK_TO_TITLE_TOOLTIP")
+	if _resume_button != null:
+		_resume_button.tooltip_text = _loc().t("PAUSE_RESUME_TOOLTIP")
+	# 分组标题
+	if _summary_section_title != null:
+		_summary_section_title.text = _loc().t("SUMMARY_CURRENT_WORLD")
+	if _settings_title_label != null:
+		_settings_title_label.text = _loc().t("SETTINGS_TITLE")
+	if _display_title_label != null:
+		_display_title_label.text = _loc().t("DISPLAY_TITLE")
+	# 设置项标签 + 控件
+	if _quality_label != null:
+		_quality_label.text = _loc().t("SETTINGS_QUALITY")
+	if _quality_option != null and _quality_option.item_count >= 3:
+		_quality_option.set_item_text(0, _loc().t("SETTINGS_QUALITY_PERFORMANCE"))
+		_quality_option.set_item_text(1, _loc().t("SETTINGS_QUALITY_BALANCED"))
+		_quality_option.set_item_text(2, _loc().t("SETTINGS_QUALITY_CINEMATIC"))
+	if _weather_check != null:
+		_weather_check.text = _loc().t("SETTINGS_WEATHER")
+		_weather_check.tooltip_text = _loc().t("SETTINGS_WEATHER_TOOLTIP")
+	if _language_label != null:
+		_language_label.text = _loc().t("SETTINGS_LANGUAGE")
+	if _language_option != null and _language_option.item_count >= 2:
+		_language_option.tooltip_text = _loc().t("SETTINGS_LANGUAGE_TOOLTIP")
+		_language_option.set_item_text(0, _loc().t("LANG_ZH"))
+		_language_option.set_item_text(1, _loc().t("LANG_EN"))
+		_language_option.select(_language_index(_loc().current()))
+	# 显示分组
+	if _fullscreen_check != null:
+		_fullscreen_check.text = _loc().t("DISPLAY_FULLSCREEN")
+		_fullscreen_check.tooltip_text = _loc().t("DISPLAY_FULLSCREEN_TOOLTIP")
+	if _resolution_label != null:
+		_resolution_label.text = _loc().t("DISPLAY_RESOLUTION")
+	if _resolution_option != null:
+		_resolution_option.tooltip_text = _loc().t("DISPLAY_RESOLUTION_TOOLTIP")
+	# 操作说明浮层
+	if _controls_title_label != null:
+		_controls_title_label.text = _loc().t("CONTROLS_TITLE")
+	if _controls_close_button != null:
+		_controls_close_button.text = _loc().t("CONTROLS_BACK")
+	if _controls_hint_label != null:
+		_controls_hint_label.text = _loc().t("CONTROLS_HINT")
+	for entry in _controls_action_labels:
+		var label: Label = entry.get("label")
+		if label != null and is_instance_valid(label):
+			label.text = _loc().t(str(entry.get("key", "")))
+	# 含数值/随模式变化的文案（视距/音量/灵敏度、副标题、继续按钮）。
+	_refresh_labels()
+	_refresh_mode()
+
+# 自动加载单例 Locale 比本菜单存活更久：销毁时断开信号，避免悬空回调。
+func _exit_tree() -> void:
+	if _loc().language_changed.is_connected(_retranslate):
+		_loc().language_changed.disconnect(_retranslate)
+
 func _refresh_labels() -> void:
 	if _view_label != null:
-		_view_label.text = "视距  %d" % _view_radius
+		_view_label.text = "%s  %d" % [_loc().t("SETTINGS_VIEW_DISTANCE"), _view_radius]
 	if _volume_label != null:
-		_volume_label.text = "音量  %d%%" % int(round(_volume * 100.0))
+		_volume_label.text = "%s  %d%%" % [_loc().t("SETTINGS_VOLUME"), int(round(_volume * 100.0))]
 	if _sensitivity_label != null:
-		_sensitivity_label.text = "灵敏度  %d%%" % int(round(_sensitivity * 100.0))
+		_sensitivity_label.text = "%s  %d%%" % [_loc().t("SETTINGS_SENSITIVITY"), int(round(_sensitivity * 100.0))]
 
 func _refresh_summary() -> void:
 	if _summary_box == null:
@@ -852,9 +1009,9 @@ func _refresh_mode() -> void:
 		_panel.offset_top = -238 if _title_settings_mode else -315
 		_panel.offset_bottom = 238 if _title_settings_mode else 315
 	if _subtitle_label != null:
-		_subtitle_label.text = "首屏设置" if _title_settings_mode else "已暂停"
+		_subtitle_label.text = _loc().t("PAUSE_SUBTITLE_TITLE_SETTINGS") if _title_settings_mode else _loc().t("PAUSE_SUBTITLE_PAUSED")
 	if _resume_button != null:
-		_resume_button.text = "返回标题" if _title_settings_mode else "继续"
+		_resume_button.text = _loc().t("PAUSE_BACK_TO_TITLE") if _title_settings_mode else _loc().t("PAUSE_RESUME")
 	if _summary_box != null:
 		_summary_box.visible = not _title_settings_mode
 	# 操作说明在首屏设置模式同样隐藏（没有世界上下文）。
