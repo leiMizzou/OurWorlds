@@ -11,20 +11,16 @@ extends Node
 # 由 Main 注入 world / player(+hud) 引用；每个工具映射到这些节点上已存在的方法。
 
 const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
-const Chunk = preload("res://scripts/Chunk.gd")
-const Blueprint = preload("res://scripts/Blueprint.gd")
-const BLUEPRINT_DIR := "user://blueprints"
+const AgentToolCore = preload("res://scripts/AgentToolCore.gd")
+const AgentContext = preload("res://scripts/AgentContext.gd")
 
 const DEFAULT_PORT := 8970
-const MAX_CELLS := 4096
 const RECENT_ACTIONS_CAP := 8
 const MEMORY_PATH := "user://agent_memory.json"
 const MEMORY_NOTE_CAP := 50
-const SY := Chunk.SY                 # 96
 const NEARBY_LANDMARK_CAP := 6
 const NEARBY_LANDMARK_RANGE := 64.0
 const DEFAULT_EID := "agent"         # 无实体上下文（如直接测试调用）时的默认实体 id
-const LOBBY_CHAT_RECENT := 20        # observe.chat 返回的最近大厅消息条数
 
 # 注入引用（Main 在 _ready 末尾设置）
 var world
@@ -57,20 +53,7 @@ const BLOCK_ALIASES := {
 	31: "gold_trim", 32: "red_sand", 33: "terracotta", 34: "sunstone",
 	35: "neon_cyan", 36: "neon_magenta", 37: "neon_lime", 38: "rail",
 }
-
-# 中文地貌标签 -> 英文别名（契约 §6）
-const REGION_ALIASES := {
-	"草原": "meadow", "风草原": "windswept_plains", "花海草甸": "flower_meadow",
-	"针叶林": "taiga", "苔林": "mossy_forest", "沙漠": "desert",
-	"红土台地": "mesa", "岩岭": "rocky_ridge", "玄武岩岭": "basalt_ridge",
-	"雪峰": "snow_peaks", "湿地": "wetland", "沙岸": "sandy_shore",
-	"黏土滩": "clay_flat", "浅水湾": "shallow_cove",
-	# 主题岛扇区
-	"雪山": "snow_mountain", "热带海岸": "tropical_coast",
-	"村庄": "village", "中央广场": "central_plaza",
-	"霓虹城": "neon_city", "天文台": "observatory",
-	"农田": "farmland", "海湾": "bay", "虚空": "void",
-}
+# 注：中文地貌标签 -> 英文别名（REGION_ALIASES）已随工具逻辑迁入 AgentToolCore。
 
 func _ready() -> void:
 	_load_memory()
@@ -190,445 +173,18 @@ func dispatch_line(line: String, eid: String = DEFAULT_EID) -> Dictionary:
 	return dispatch(rid, tool, args, eid)
 
 # 直接分发（给测试 / TCP 共用）。eid = 调用方实体。返回完整响应信封。
+# 工具逻辑已抽到节点无关的 AgentToolCore；这里只负责构造活节点上下文(LiveAgentContext)、
+# 委托执行、再补上响应信封的 id。bridge 仍是 localhost 的活适配器。
 func dispatch(rid: Variant, tool: String, args: Dictionary, eid: String = DEFAULT_EID) -> Dictionary:
 	_current_eid = eid
-	var result := _handle(tool, args)
-	if result.has("__error"):
-		return {"id": rid, "ok": false, "error": str(result["__error"])}
-	return {"id": rid, "ok": true, "result": result}
+	var ctx := AgentContext.LiveAgentContext.new(self)
+	var res := AgentToolCore.handle(tool, args, ctx)
+	res["id"] = rid
+	return res
 
-func _err(msg: String) -> Dictionary:
-	return {"__error": msg}
+# ============ 旧工具实现已迁移至 AgentToolCore；以下辅助由 LiveAgentContext 委托调用（仍是活节点适配器） ============
 
-func _ready_for_acting() -> bool:
-	return world != null and player != null
-
-# 工具分发表。返回 result Dictionary，或 {"__error": "..."}。
-func _handle(tool: String, args: Dictionary) -> Dictionary:
-	match tool:
-		"observe":
-			return _tool_observe(args)
-		"identify":
-			return _tool_identify(args)
-		"look":
-			return _tool_look(args)
-		"goto":
-			return _tool_goto(args)
-		"scan":
-			return _tool_scan(args)
-		"place":
-			return _tool_place(args)
-		"break":
-			return _tool_break(args)
-		"build":
-			return _tool_build(args)
-		"capture_build":
-			return _tool_capture_build(args)
-		"paste_build":
-			return _tool_paste_build(args)
-		"get_block":
-			return _tool_get_block(args)
-		"say":
-			return _tool_say(args)
-		"set_goal":
-			return _tool_set_goal(args)
-		"remember":
-			return _tool_remember(args)
-		"get_memory":
-			return _tool_get_memory(args)
-		_:
-			return _err("unknown tool: " + tool)
-
-# ============ 工具实现 ============
-
-func _tool_observe(args: Dictionary) -> Dictionary:
-	if not _ready_for_acting():
-		return {"ready": false}
-	var hsize := int(args.get("heightmap_size", 16))
-	if hsize <= 0 or hsize > 16:
-		hsize = 16
-	if hsize % 2 != 0:
-		hsize -= 1
-	var pos := _player_cell()
-	var yaw_deg := _player_yaw_deg()
-	var pitch_deg := _player_pitch_deg()
-	var region := str(world.region_label(pos.x, pos.z))
-	var frac := _time_fraction()
-	var half := int(hsize / 2)
-	var origin_x := pos.x - half
-	var origin_z := pos.z - half
-	var rows := []
-	for r in range(hsize):
-		var row := []
-		for c in range(hsize):
-			row.append(int(world.surface_y(origin_x + c, origin_z + r)))
-		rows.append(row)
-	var result := {
-		"pos": [pos.x, pos.y, pos.z],
-		"facing": {
-			"yaw_deg": yaw_deg,
-			"pitch_deg": pitch_deg,
-			"cardinal": _cardinal_from_yaw(yaw_deg),
-		},
-		"region": region,
-		"region_en": _region_alias(region),
-		"time_of_day": {
-			"fraction": snappedf(frac, 0.01),
-			"phase": _time_phase(frac),
-			"clock": _time_clock(frac),
-		},
-		"selected_block": _alias_for(player.current_block()),
-		"hotbar": _hotbar_aliases(),
-		"heightmap": {
-			"size": hsize,
-			"origin": [origin_x, origin_z],
-			"rows": rows,
-		},
-		"nearby_landmarks": _nearby_landmarks(),
-		"recent_actions": _recent_actions.duplicate(true),
-	}
-	if chat_hub != null:
-		result["chat"] = chat_hub.lobby_recent(LOBBY_CHAT_RECENT)
-		var since := int(_since.get(_current_eid, 0))
-		var unread: Dictionary = chat_hub.unread_for(_current_eid, since)
-		result["inbox"] = unread["messages"]
-		_since[_current_eid] = unread["last_seq"]
-	return result
-
-func _tool_look(args: Dictionary) -> Dictionary:
-	if not _ready_for_acting():
-		return _err("world not ready")
-	if args.has("yaw_deg"):
-		var yaw := fposmod(float(args["yaw_deg"]), 360.0)
-		if avatar != null:
-			avatar.rotation.y = deg_to_rad(yaw)
-		else:
-			player.rotation.y = deg_to_rad(yaw)
-	if args.has("pitch_deg") and avatar == null:
-		var pitch_deg := clampf(float(args["pitch_deg"]), -80.0, 80.0)
-		player.pitch = clampf(deg_to_rad(pitch_deg), -1.4, 1.4)
-		if player.spring != null:
-			player.spring.rotation.x = player.pitch
-	var yaw_now := _player_yaw_deg()
-	var pitch_now := _player_pitch_deg()
-	var facing := {"yaw_deg": yaw_now, "pitch_deg": pitch_now, "cardinal": _cardinal_from_yaw(yaw_now)}
-	_record_action("look", "yaw %.0f pitch %.0f" % [yaw_now, pitch_now], true)
-	return {"facing": facing}
-
-func _tool_goto(args: Dictionary) -> Dictionary:
-	if not _ready_for_acting():
-		return _err("world not ready")
-	if not args.has("x") or not args.has("z"):
-		return _err("bad args: x/z (required)")
-	var x := int(args["x"])
-	var z := int(args["z"])
-	var sy := int(world.surface_y(x, z))
-	var place_y := sy + 1
-	if args.has("y"):
-		place_y = clampi(int(args["y"]), 0, SY - 1)
-	# 让目标点立即可踩（同步生成该处区块）
-	if world.has_method("prime") and world.has_method("chunk_of"):
-		world.prime(world.chunk_of(x, z), 1)
-	var dest := Vector3(float(x) + 0.5, float(place_y), float(z) + 0.5)
-	if avatar != null:
-		avatar.teleport_to(dest)              # 移动 AI 小人，不动玩家
-	else:
-		player.global_position = dest
-		player.velocity = Vector3.ZERO
-	var region := str(world.region_label(x, z))
-	_record_action("goto", "-> (%d,%d,%d)" % [x, place_y, z], true)
-	return {
-		"pos": [x, place_y, z],
-		"region": region,
-		"region_en": _region_alias(region),
-		"surface_y": sy,
-	}
-
-func _tool_scan(args: Dictionary) -> Dictionary:
-	if not _ready_for_acting():
-		return _err("world not ready")
-	var radius := int(args.get("radius", 8))
-	radius = clampi(radius, 1, 24)
-	var center := _player_cell()
-	var span := 2 * radius + 1
-	var step := int(ceil(float(span) / 16.0))
-	if step < 1:
-		step = 1
-	var origin_x := center.x - radius
-	var origin_z := center.z - radius
-	var heights := []
-	var surface_blocks := []
-	var histogram := {}
-	var regions_seen := {}
-	var min_y := 1 << 30
-	var max_y := -(1 << 30)
-	var sum_y := 0
-	var count := 0
-	var water_cols := 0
-	# 平整度评估：记录每个采样列高度，找局部方差小的列做建议建造点
-	var best_spot: Variant = null
-	var best_variance := 1 << 30
-	var z := origin_z
-	while z <= center.z + radius:
-		var hrow := []
-		var brow := []
-		var x := origin_x
-		while x <= center.x + radius:
-			var sy := int(world.surface_y(x, z))
-			hrow.append(sy)
-			min_y = mini(min_y, sy)
-			max_y = maxi(max_y, sy)
-			sum_y += sy
-			count += 1
-			var top_id := int(world.get_block(x, sy, z))
-			var alias := _alias_for(top_id)
-			brow.append(alias)
-			histogram[alias] = int(histogram.get(alias, 0)) + 1
-			if alias == "water":
-				water_cols += 1
-			var rlabel := str(world.region_label(x, z))
-			if rlabel != "":
-				regions_seen[rlabel] = true
-			# 局部高度方差（与四个 step 邻居比），找平地
-			var variance := absi(sy - int(world.surface_y(x + step, z))) \
-				+ absi(sy - int(world.surface_y(x - step, z))) \
-				+ absi(sy - int(world.surface_y(x, z + step))) \
-				+ absi(sy - int(world.surface_y(x, z - step)))
-			if variance < best_variance or (variance == best_variance and best_spot == null):
-				best_variance = variance
-				best_spot = [x, sy + 1, z]
-			x += step
-		heights.append(hrow)
-		surface_blocks.append(brow)
-		z += step
-	var avg_y := int(round(float(sum_y) / float(maxi(1, count))))
-	var regions_present := regions_seen.keys()
-	regions_present.sort()
-	return {
-		"center": [center.x, center.z],
-		"radius": radius,
-		"surface_y": {"min": min_y, "max": max_y, "avg": avg_y},
-		"columns": {
-			"step": step,
-			"origin": [origin_x, origin_z],
-			"height": heights,
-			"surface_block": surface_blocks,
-		},
-		"block_histogram": histogram,
-		"regions_present": regions_present,
-		"water_fraction": snappedf(float(water_cols) / float(maxi(1, count)), 0.01),
-		"landmarks_in_range": _landmarks_in_range(center, float(radius)),
-		"suggested_build_spot": best_spot,
-	}
-
-func _tool_place(args: Dictionary) -> Dictionary:
-	if not _ready_for_acting():
-		return _err("world not ready")
-	if not args.has("block"):
-		return _err("bad args: block (required)")
-	var block_name := str(args["block"])
-	var id := _resolve_block(block_name)
-	if id < 0:
-		return _err("unknown block: " + block_name)
-	var cells_raw: Variant = args.get("cells", [])
-	if typeof(cells_raw) != TYPE_ARRAY:
-		return _err("bad args: cells (expected array)")
-	var cells: Array = cells_raw
-	if cells.size() > MAX_CELLS:
-		return _err("too many cells: %d > %d" % [cells.size(), MAX_CELLS])
-	var edits := _cells_to_edits(cells, id)
-	var changed := 0
-	if world.has_method("request_block_edits"):
-		changed = int(world.request_block_edits(edits))
-	_record_action("place", "%s x%d @ %d cells" % [_id_to_alias.get(id, block_name), changed, cells.size()], true)
-	return {"requested": cells.size(), "changed": changed, "block": _id_to_alias.get(id, block_name)}
-
-func _tool_break(args: Dictionary) -> Dictionary:
-	if not _ready_for_acting():
-		return _err("world not ready")
-	var cells_raw: Variant = args.get("cells", [])
-	if typeof(cells_raw) != TYPE_ARRAY:
-		return _err("bad args: cells (expected array)")
-	var cells: Array = cells_raw
-	if cells.size() > MAX_CELLS:
-		return _err("too many cells: %d > %d" % [cells.size(), MAX_CELLS])
-	var edits := _cells_to_edits(cells, BlockLibrary.AIR)
-	var changed := 0
-	if world.has_method("request_block_edits"):
-		changed = int(world.request_block_edits(edits))
-	_record_action("break", "cleared %d / %d cells" % [changed, cells.size()], true)
-	return {"requested": cells.size(), "changed": changed}
-
-func _tool_build(args: Dictionary) -> Dictionary:
-	if not _ready_for_acting():
-		return _err("world not ready")
-	if not args.has("template"):
-		return _err("bad args: template (required)")
-	var template := str(args["template"])
-	if template == "off" or template == "":
-		return _err("unknown template: " + template)
-	if not player.has_method("apply_build_template"):
-		return _err("world not ready")
-	if not args.has("x") or not args.has("y") or not args.has("z"):
-		return _err("bad args: x/y/z (required)")
-	var x := int(args["x"])
-	var y := int(args["y"])
-	var z := int(args["z"])
-	var rotation := _rotation_to_index(args.get("rotation", 0))
-	var origin := Vector3i(x, y, z)
-	var changed := int(player.apply_build_template(template, origin, rotation))
-	if changed < 0:
-		return _err("unknown template: " + template)
-	if avatar != null:
-		avatar.note_build()                  # 小人闪一下，表示"它在这儿盖的"
-	_record_action("build", "%s @ (%d,%d,%d)" % [template, x, y, z], true)
-	return {"template": template, "anchor": [x, y, z], "rotation": rotation, "changed": changed}
-
-# 捕获一块长方体区域存成蓝图文件（可分享/异地重现）：args name + x1,y1,z1, x2,y2,z2
-func _tool_capture_build(args: Dictionary) -> Dictionary:
-	if not _ready_for_acting():
-		return _err("world not ready")
-	var name := str(args.get("name", "")).strip_edges()
-	if name == "" or not name.is_valid_filename():
-		return _err("bad args: name (required, 须为合法文件名)")
-	for k in ["x1", "y1", "z1", "x2", "y2", "z2"]:
-		if not args.has(k):
-			return _err("bad args: x1/y1/z1/x2/y2/z2 (required)")
-	var a := Vector3i(int(args["x1"]), int(args["y1"]), int(args["z1"]))
-	var b := Vector3i(int(args["x2"]), int(args["y2"]), int(args["z2"]))
-	var bp: Dictionary = Blueprint.capture(world, a, b)
-	var n_blocks := int((bp.get("blocks", {}) as Dictionary).size())
-	if n_blocks > MAX_CELLS:
-		return _err("too big: %d > %d 块" % [n_blocks, MAX_CELLS])
-	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(BLUEPRINT_DIR))
-	var path := "%s/%s.json" % [BLUEPRINT_DIR, name]
-	var f := FileAccess.open(path, FileAccess.WRITE)
-	if f == null:
-		return _err("write failed: " + path)
-	f.store_string(Blueprint.serialize(bp))
-	f.close()
-	_record_action("capture_build", "%s (%d 块)" % [name, n_blocks], true)
-	return {"name": name, "size": bp.get("size", []), "blocks": n_blocks}
-
-# 把蓝图贴到锚点（走正常编辑链路，联机会广播）：args name + x,y,z
-func _tool_paste_build(args: Dictionary) -> Dictionary:
-	if not _ready_for_acting():
-		return _err("world not ready")
-	var name := str(args.get("name", "")).strip_edges()
-	if name == "" or not name.is_valid_filename():
-		return _err("bad args: name (required)")
-	for k in ["x", "y", "z"]:
-		if not args.has(k):
-			return _err("bad args: x/y/z (required)")
-	var path := "%s/%s.json" % [BLUEPRINT_DIR, name]
-	if not FileAccess.file_exists(path):
-		return _err("no such blueprint: " + name)
-	var bp: Dictionary = Blueprint.deserialize(FileAccess.get_file_as_string(path))
-	if bp.is_empty():
-		return _err("bad blueprint file: " + name)
-	var anchor := Vector3i(int(args["x"]), int(args["y"]), int(args["z"]))
-	var edits: Array = Blueprint.paste_edits(bp, anchor)
-	if edits.size() > MAX_CELLS:
-		return _err("too big: %d > %d" % [edits.size(), MAX_CELLS])
-	var changed := 0
-	if world.has_method("request_block_edits"):
-		changed = int(world.request_block_edits(edits))
-	_record_action("paste_build", "%s @ (%d,%d,%d) -> %d 块" % [name, anchor.x, anchor.y, anchor.z, changed], true)
-	return {"name": name, "anchor": [anchor.x, anchor.y, anchor.z], "changed": changed}
-
-func _tool_get_block(args: Dictionary) -> Dictionary:
-	if not _ready_for_acting():
-		return _err("world not ready")
-	if not args.has("x") or not args.has("y") or not args.has("z"):
-		return _err("bad args: x/y/z (required)")
-	var x := int(args["x"])
-	var y := int(args["y"])
-	var z := int(args["z"])
-	var id := 0
-	if y >= 0 and y < SY:
-		id = int(world.get_block(x, y, z))
-	var solid := false
-	if world.lib != null:
-		solid = bool(world.lib.is_solid(id))
-	return {"pos": [x, y, z], "block": _alias_for(id), "solid": solid}
-
-func _tool_say(args: Dictionary) -> Dictionary:
-	var text := str(args.get("text", "")).strip_edges()
-	if text.length() > 120:
-		text = text.substr(0, 120)
-	# 路由到聊天中枢（若注入）：to 省略=公共大厅；to=名字/id=私聊。
-	var to_label := "lobby"
-	if chat_hub != null:
-		var to_raw := str(args.get("to", "")).strip_edges()
-		if to_raw == "":
-			chat_hub.post(_current_eid, "", text)
-		else:
-			chat_hub.post(_current_eid, chat_hub.resolve(to_raw), text)
-			to_label = to_raw
-	var shown := false
-	if hud != null and hud.has_method("show_feedback"):
-		hud.show_feedback("agent", text)
-		shown = true
-	elif player != null and player.has_signal("action_feedback"):
-		player.action_feedback.emit("agent", text)
-		shown = true
-	_record_action("say", text, shown)
-	return {"shown": shown, "to": to_label}
-
-func _tool_set_goal(args: Dictionary) -> Dictionary:
-	var text := str(args.get("text", "")).strip_edges()
-	if text.length() > 200:
-		text = text.substr(0, 200)
-	_memory["goal"] = text
-	_save_memory()
-	if chat_hub != null:
-		chat_hub.set_status(_current_eid, text)
-	if not _peers.is_empty():
-		_notify_agent_status(true)
-	return {"goal": text}
-
-func _tool_remember(args: Dictionary) -> Dictionary:
-	var text := str(args.get("text", "")).strip_edges()
-	if text.length() > 280:
-		text = text.substr(0, 280)
-	var notes: Array = _memory.get("notes", [])
-	notes.append(text)
-	while notes.size() > MEMORY_NOTE_CAP:
-		notes.pop_front()
-	_memory["notes"] = notes
-	_save_memory()
-	return {"remembered": true, "note_count": notes.size()}
-
-func _tool_get_memory(_args: Dictionary) -> Dictionary:
-	return {
-		"goal": str(_memory.get("goal", "")),
-		"notes": (_memory.get("notes", []) as Array).duplicate(),
-		"updated_at": int(_memory.get("updated_at", 0)),
-	}
-
-# 报名：设置当前实体在在线列表里的显示名（连接后调用；默认名为 agent-N）。
-func _tool_identify(args: Dictionary) -> Dictionary:
-	var name := str(args.get("name", "")).strip_edges()
-	if name.length() > 40:
-		name = name.substr(0, 40)
-	if chat_hub != null and name != "":
-		chat_hub.register(_current_eid, name, "agent")
-	return {"entity_id": _current_eid, "name": name}
-
-# ============ 辅助：感知 ============
-
-func _player_cell() -> Vector3i:
-	var p: Vector3 = avatar.global_position if avatar != null else player.global_position
-	return Vector3i(floori(p.x), floori(p.y), floori(p.z))
-
-func _player_yaw_deg() -> float:
-	var yaw: float = avatar.rotation.y if avatar != null else player.rotation.y
-	return fposmod(rad_to_deg(yaw), 360.0)
-
-func _player_pitch_deg() -> float:
-	if avatar != null:
-		return 0.0
-	return rad_to_deg(player.pitch)
+# ============ 辅助：感知（LiveAgentContext 用） ============
 
 func _cardinal_from_yaw(yaw_deg: float) -> String:
 	# yaw 0 = 面朝 -Z (北)。顺时针每 45° 一档。
@@ -662,16 +218,6 @@ func _time_clock(frac: float) -> String:
 	var h := int(total)
 	var m := int((total - float(h)) * 60.0)
 	return "%02d:%02d" % [h, m]
-
-func _region_alias(label: String) -> String:
-	return str(REGION_ALIASES.get(label, label))
-
-func _hotbar_aliases() -> Array:
-	var out := []
-	if world.lib != null:
-		for raw in world.lib.hotbar_blocks():
-			out.append(_alias_for(int(raw)))
-	return out
 
 func _alias_for(id: int) -> String:
 	return str(_id_to_alias.get(id, "air"))
@@ -778,39 +324,7 @@ func _discovery_tracker():
 	var dt: Variant = main.get("discovery_tracker")
 	return dt
 
-# ============ 辅助：动作 ============
-
-func _cells_to_edits(cells: Array, id: int) -> Array:
-	var edits := []
-	for raw in cells:
-		var cell: Variant = _to_vec3i(raw)
-		if cell == null:
-			continue
-		var c: Vector3i = cell
-		if c.y < 0 or c.y >= SY:
-			continue
-		edits.append({"pos": c, "id": id})
-	return edits
-
-func _to_vec3i(raw: Variant):
-	if typeof(raw) == TYPE_ARRAY:
-		var arr: Array = raw
-		if arr.size() == 3:
-			return Vector3i(int(arr[0]), int(arr[1]), int(arr[2]))
-	if typeof(raw) == TYPE_VECTOR3I:
-		return raw
-	if typeof(raw) == TYPE_VECTOR3:
-		var v: Vector3 = raw
-		return Vector3i(int(v.x), int(v.y), int(v.z))
-	return null
-
-func _rotation_to_index(raw: Variant) -> int:
-	var val := int(raw)
-	# 接受 0/1，或角度 0/90/180/270（偶=0，奇=1）
-	if val == 0 or val == 1:
-		return val
-	var steps := int(round(float(val) / 90.0))
-	return posmod(steps, 2)
+# ============ 辅助：动作（LiveAgentContext 用） ============
 
 func _record_action(tool: String, summary: String, ok: bool) -> void:
 	_recent_actions.append({"tool": tool, "summary": summary, "ok": ok})
