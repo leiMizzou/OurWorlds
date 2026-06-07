@@ -5,12 +5,16 @@ extends Node
 const SR := 22050
 const LOOP_SEC := 8.0
 const BASE_DB := -17.0    # 音乐整体压低，作背景
+const ENABLED := false    # 程序化持续正弦和弦 pad 被反馈为"嗡嗡 drone/噪响"，默认关闭。
+                          # 改 true 可恢复，但建议先加 ADSR 包络/低通，否则纯正弦会一直 drone。
 
 var _player: AudioStreamPlayer
 var _volume := 0.6        # 跟随设置的主音量(0..1)
 var _daylight := 1.0
 
 func setup(volume: float = 0.6) -> void:
+	if not ENABLED:
+		return            # 不播放氛围 pad（避免持续正弦 drone 噪响）
 	_volume = clampf(volume, 0.0, 1.0)
 	_player = AudioStreamPlayer.new()
 	_player.name = "PadPlayer"
