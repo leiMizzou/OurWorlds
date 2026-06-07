@@ -1,5 +1,8 @@
 extends CanvasLayer
 # 首屏入口：让玩家先看到真实世界，再进入建造。
+#
+# i18n：经 _loc()（/root/Locale 节点路径）访问 Locale 单例，而不是裸标识符 `Locale` ——
+# 因为 GDScript 在 `godot --script` 编译被 preload 的脚本时不会注入 autoload 全局名。
 
 signal continue_requested(seed: int)
 signal new_world_requested(seed: int, kind: String)
@@ -35,6 +38,33 @@ var _new_seed := 1337
 var _new_kind := "infinite"
 var _kind_button: CheckButton
 var _delete_pending := false
+# i18n：需在切换语言时重译的静态标签/按钮引用（动态文案由 _refresh_* 重算）。
+var _tagline_label: Label
+var _new_seed_section_label: Label
+var _autosave_note_label: Label
+var _loc_cached: Node               # 缓存的 Locale 自动加载单例（经 /root/Locale 取，见 _loc()）
+
+# 经节点路径取 Locale 自动加载单例（不要用裸标识符 `Locale`）：
+# GDScript 在 `godot --script` 编译被 preload 的脚本时不会注入 autoload 全局名，
+# 裸引用会报 “Identifier not found: Locale” 并使依赖该脚本的纯逻辑测试编译失败。
+# 运行期 /root/Locale 一定存在；用一个安全垫片，万一缺失也只是退化为返回 key。
+func _loc() -> Node:
+	if _loc_cached != null and is_instance_valid(_loc_cached):
+		return _loc_cached
+	# is_inside_tree() 守卫：在 SceneTree._initialize 阶段直接构造（无头单测）时
+	# get_tree() 尚未就绪会打印 “data.tree is null” 噪声——此时退到下面的兜底实例。
+	var tree := get_tree() if is_inside_tree() else null
+	if tree != null and tree.root != null:
+		_loc_cached = tree.root.get_node_or_null("Locale")
+	if _loc_cached == null:
+		# 极端兜底（理论上不会发生）：用脚本实例临时顶上，保证不崩。
+		_loc_cached = (load("res://scripts/Locale.gd") as GDScript).new()
+		_loc_cached.call("load_strings")
+	return _loc_cached
+
+func _t(key: String) -> String:
+	var l := _loc()
+	return l.t(key) if l != null else key
 
 func setup(worlds: Array, selected_seed: int, fallback_seed: int) -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -175,11 +205,11 @@ func _build() -> void:
 	title.modulate = Color(1, 1, 1, 0.98)
 	box.add_child(title)
 
-	var tagline := Label.new()
-	tagline.text = "创造模式体素沙盒"
-	tagline.add_theme_font_size_override("font_size", 16)
-	tagline.modulate = Color(0.82, 0.92, 1.0, 0.82)
-	box.add_child(tagline)
+	_tagline_label = Label.new()
+	_tagline_label.text = _t("TITLE_TAGLINE")
+	_tagline_label.add_theme_font_size_override("font_size", 16)
+	_tagline_label.modulate = Color(0.82, 0.92, 1.0, 0.82)
+	box.add_child(_tagline_label)
 
 	box.add_child(_spacer(8))
 
@@ -196,30 +226,30 @@ func _build() -> void:
 	_world_stats_row.add_theme_constant_override("v_separation", 6)
 	box.add_child(_world_stats_row)
 
-	_continue_button = _button("继续世界")
-	_continue_button.tooltip_text = "进入当前选中的世界（Enter）"
+	_continue_button = _button(_t("TITLE_CONTINUE_WORLD"))
+	_continue_button.tooltip_text = _t("TITLE_CONTINUE_TOOLTIP")
 	_continue_button.pressed.connect(request_continue_selected)
 	box.add_child(_continue_button)
 
-	_settings_button = _button("设置")
-	_settings_button.tooltip_text = "打开画质、音量、全屏与分辨率设置"
+	_settings_button = _button(_t("TITLE_SETTINGS"))
+	_settings_button.tooltip_text = _t("TITLE_SETTINGS_TOOLTIP")
 	_settings_button.pressed.connect(func(): settings_requested.emit())
 	box.add_child(_settings_button)
 
 	box.add_child(_new_seed_panel())
 
-	_fresh_button = _button("创建新世界")
-	_fresh_button.tooltip_text = "用上方种子生成一个新世界"
+	_fresh_button = _button(_t("TITLE_CREATE_WORLD"))
+	_fresh_button.tooltip_text = _t("TITLE_CREATE_TOOLTIP")
 	_fresh_button.pressed.connect(_on_new_world_pressed)
 	box.add_child(_fresh_button)
 
-	_delete_button = _button("删除当前世界")
-	_delete_button.tooltip_text = "删除当前选中世界的本地存档（需二次确认）"
+	_delete_button = _button(_t("TITLE_DELETE_WORLD"))
+	_delete_button.tooltip_text = _t("TITLE_DELETE_TOOLTIP")
 	_delete_button.pressed.connect(_on_delete_pressed)
 	box.add_child(_delete_button)
 
 	_delete_hint = Label.new()
-	_delete_hint.text = "再次点击确认删除，无法撤销。"
+	_delete_hint.text = _t("TITLE_DELETE_HINT")
 	_delete_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_delete_hint.add_theme_font_size_override("font_size", 12)
 	_delete_hint.modulate = Color(1.0, 0.62, 0.54, 0.90)
@@ -246,13 +276,18 @@ func _build() -> void:
 	_meta_label.visible = false
 	box.add_child(_meta_label)
 
-	var goal := Label.new()
-	goal.text = "进入后建造会自动保存。"
-	goal.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	goal.add_theme_font_size_override("font_size", 13)
-	goal.modulate = Color(1.0, 0.92, 0.70, 0.88)
-	goal.visible = false
-	box.add_child(goal)
+	_autosave_note_label = Label.new()
+	_autosave_note_label.text = _t("TITLE_AUTOSAVE_NOTE")
+	_autosave_note_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_autosave_note_label.add_theme_font_size_override("font_size", 13)
+	_autosave_note_label.modulate = Color(1.0, 0.92, 0.70, 0.88)
+	_autosave_note_label.visible = false
+	box.add_child(_autosave_note_label)
+
+	# 语言切换时即时重译（标题页打开期间切换也能立刻生效）。
+	var l := _loc()
+	if l != null and not l.language_changed.is_connected(_retranslate):
+		l.language_changed.connect(_retranslate)
 
 func set_worlds(worlds: Array, selected_seed: int) -> void:
 	_worlds = worlds.duplicate()
@@ -274,7 +309,7 @@ func _world_row() -> Control:
 	_prev_button = _button("<")
 	_prev_button.custom_minimum_size = Vector2(48, 38)
 	_prev_button.focus_mode = Control.FOCUS_NONE
-	_prev_button.tooltip_text = "上一个世界（←）"
+	_prev_button.tooltip_text = _t("TITLE_PREV_WORLD_TOOLTIP")
 	_prev_button.pressed.connect(func(): _move_selection(-1))
 	row.add_child(_prev_button)
 
@@ -289,7 +324,7 @@ func _world_row() -> Control:
 	_next_button = _button(">")
 	_next_button.custom_minimum_size = Vector2(48, 38)
 	_next_button.focus_mode = Control.FOCUS_NONE
-	_next_button.tooltip_text = "下一个世界（→）"
+	_next_button.tooltip_text = _t("TITLE_NEXT_WORLD_TOOLTIP")
 	_next_button.pressed.connect(func(): _move_selection(1))
 	row.add_child(_next_button)
 	return row
@@ -298,18 +333,18 @@ func _new_seed_panel() -> Control:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 4)
 
-	var label := Label.new()
-	label.text = "新世界种子"
-	label.add_theme_font_size_override("font_size", 13)
-	label.modulate = Color(0.86, 0.93, 1.0, 0.74)
-	box.add_child(label)
+	_new_seed_section_label = Label.new()
+	_new_seed_section_label.text = _t("TITLE_NEW_SEED_LABEL")
+	_new_seed_section_label.add_theme_font_size_override("font_size", 13)
+	_new_seed_section_label.modulate = Color(0.86, 0.93, 1.0, 0.74)
+	box.add_child(_new_seed_section_label)
 
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	box.add_child(row)
 
 	_new_seed_edit = LineEdit.new()
-	_new_seed_edit.placeholder_text = "数字或文字种子"
+	_new_seed_edit.placeholder_text = _t("TITLE_SEED_PLACEHOLDER")
 	_new_seed_edit.clear_button_enabled = true
 	_new_seed_edit.custom_minimum_size = Vector2(0, 36)
 	_new_seed_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -318,9 +353,9 @@ func _new_seed_panel() -> Control:
 	_new_seed_edit.text_submitted.connect(_on_new_seed_submitted)
 	row.add_child(_new_seed_edit)
 
-	_random_seed_button = _button("随机")
+	_random_seed_button = _button(_t("TITLE_RANDOM"))
 	_random_seed_button.custom_minimum_size = Vector2(76, 36)
-	_random_seed_button.tooltip_text = "随机生成一个新种子"
+	_random_seed_button.tooltip_text = _t("TITLE_RANDOM_TOOLTIP")
 	_random_seed_button.add_theme_font_size_override("font_size", 14)
 	_random_seed_button.pressed.connect(_randomize_new_seed)
 	row.add_child(_random_seed_button)
@@ -330,8 +365,8 @@ func _new_seed_panel() -> Control:
 	_new_seed_name_label.modulate = Color(1.0, 0.92, 0.70, 0.82)
 	box.add_child(_new_seed_name_label)
 	_kind_button = CheckButton.new()
-	_kind_button.text = "浮空主题岛"
-	_kind_button.tooltip_text = "九域浮空岛：雪山·沙漠·热带·村庄·广场·霓虹城·天文台·农田·海湾"
+	_kind_button.text = _t("TITLE_KIND_ISLAND")
+	_kind_button.tooltip_text = _t("TITLE_KIND_ISLAND_TOOLTIP")
 	_kind_button.add_theme_font_size_override("font_size", 13)
 	_kind_button.toggled.connect(func(on):
 		_new_kind = "themed_island" if on else "infinite"
@@ -406,9 +441,9 @@ func _suggest_new_seed(selected_seed: int) -> int:
 func _refresh_new_seed_preview() -> void:
 	var seed := _new_world_seed()
 	var is_island := _new_kind == "themed_island"
-	var biome := "浮空主题岛" if is_island else WorldCatalog.world_biome_label(seed)
+	var biome := _t("TITLE_KIND_ISLAND") if is_island else WorldCatalog.world_biome_label(seed)
 	if _new_seed_name_label != null:
-		_new_seed_name_label.text = "将生成：%s  ·  %s  #%d" % [WorldCatalog.world_name(seed), biome, seed]
+		_new_seed_name_label.text = _t("TITLE_SEED_PREVIEW") % [WorldCatalog.world_name(seed), biome, seed]
 	if _world_cover != null and _worlds.is_empty():
 		_world_cover.set_world_meta({
 			"seed": seed,
@@ -430,11 +465,11 @@ func _refresh_world_labels() -> void:
 		stats_meta = _worlds[_selected_index]
 	if _world_label != null:
 		if has_worlds:
-			var world_name := String(stats_meta.get("name", "世界"))
+			var world_name := String(stats_meta.get("name", _t("TITLE_WORLD_FALLBACK")))
 			var biome := String(stats_meta.get("biome_label", WorldCatalog.world_biome_label(int(stats_meta.get("seed", _fallback_seed)))))
-			_world_label.text = "%s  ·  %s  %d / %d" % [world_name, biome, _selected_index + 1, _worlds.size()]
+			_world_label.text = _t("TITLE_WORLD_LABEL") % [world_name, biome, _selected_index + 1, _worlds.size()]
 		else:
-			_world_label.text = "新世界"
+			_world_label.text = _t("TITLE_NEW_WORLD_LABEL")
 	if _world_cover != null:
 		if has_worlds:
 			_world_cover.set_world_meta(_worlds[_selected_index], false)
@@ -449,24 +484,25 @@ func _refresh_world_labels() -> void:
 	_refresh_world_stats(has_worlds, stats_meta)
 	if _save_label != null:
 		var backup_label := has_worlds and bool(stats_meta.get("from_backup", false))
-		_save_label.text = "存档  %s" % ("备份恢复" if backup_label else ("已找到" if has_worlds else "新建"))
+		var save_state := _t("TITLE_SAVE_FROM_BACKUP") if backup_label else (_t("TITLE_SAVE_FOUND") if has_worlds else _t("TITLE_SAVE_NEW"))
+		_save_label.text = _t("TITLE_SAVE_PREFIX") % save_state
 		_save_label.visible = backup_label
 	if _seed_label != null:
-		_seed_label.text = "世界种子  %d  ·  %s地貌" % [_selected_seed(), WorldCatalog.world_biome_label(_selected_seed())]
+		_seed_label.text = _t("TITLE_SEED_DETAIL") % [_selected_seed(), WorldCatalog.world_biome_label(_selected_seed())]
 		_seed_label.visible = false
 	if _meta_label != null:
 		if has_worlds:
-			var recovery_note := "  需保存" if bool(stats_meta.get("from_backup", false)) else ""
-			_meta_label.text = "上次  %s%s" % [
+			var recovery_note := _t("TITLE_NEEDS_SAVE") if bool(stats_meta.get("from_backup", false)) else ""
+			_meta_label.text = _t("TITLE_LAST_SAVED") % [
 				_format_time(int(stats_meta.get("updated_at", 0))),
 				recovery_note,
 			]
 		else:
-			_meta_label.text = "准备创建新世界"
+			_meta_label.text = _t("TITLE_READY_NEW")
 		_meta_label.visible = has_worlds and bool(stats_meta.get("from_backup", false))
 	if _delete_button != null:
 		_delete_button.disabled = not has_worlds
-		_delete_button.text = "确认删除世界" if _delete_pending and has_worlds else "删除当前世界"
+		_delete_button.text = _t("TITLE_DELETE_CONFIRM") if _delete_pending and has_worlds else _t("TITLE_DELETE_WORLD")
 		_delete_button.modulate = Color(1.0, 0.62, 0.58, 1.0) if _delete_pending and has_worlds else Color(1, 1, 1, 1)
 	if _delete_hint != null:
 		_delete_hint.visible = _delete_pending and has_worlds
@@ -475,7 +511,7 @@ func _refresh_world_labels() -> void:
 	if _next_button != null:
 		_next_button.disabled = _worlds.size() < 2
 	if _continue_button != null:
-		_continue_button.text = "继续世界" if has_worlds else "开始世界"
+		_continue_button.text = _t("TITLE_CONTINUE_WORLD") if has_worlds else _t("TITLE_START_WORLD")
 
 func _refresh_world_stats(has_worlds: bool, meta: Dictionary) -> void:
 	if _world_stats_row == null:
@@ -490,19 +526,19 @@ func _refresh_world_stats(has_worlds: bool, meta: Dictionary) -> void:
 	var region_count := int(meta.get("region_count", 0)) if has_worlds else 0
 	var region_total := int(meta.get("region_total", 0))
 	var region_text := "%d/%d" % [region_count, region_total] if region_total > 0 else str(region_count)
-	_world_stats_row.add_child(_world_stat_chip("建造", "%d 格" % edit_count, Color(1.0, 0.74, 0.38, 0.92)))
-	_world_stats_row.add_child(_world_stat_chip("遗迹", "%d 见  %d 修" % [discovery_count, restored_count], Color(0.66, 0.90, 1.0, 0.94)))
-	_world_stats_row.add_child(_world_stat_chip("旅程", "%d/%d" % [journey_count, journey_total], Color(1.0, 0.92, 0.48, 0.94)))
-	_world_stats_row.add_child(_world_stat_chip("区域", region_text, Color(0.62, 1.0, 0.74, 0.92)))
+	_world_stats_row.add_child(_world_stat_chip(_t("TITLE_STAT_BUILD"), _t("TITLE_STAT_BUILD_VALUE") % edit_count, Color(1.0, 0.74, 0.38, 0.92)))
+	_world_stats_row.add_child(_world_stat_chip(_t("TITLE_STAT_RELIC"), _t("TITLE_STAT_RELIC_VALUE") % [discovery_count, restored_count], Color(0.66, 0.90, 1.0, 0.94)))
+	_world_stats_row.add_child(_world_stat_chip(_t("TITLE_STAT_JOURNEY"), "%d/%d" % [journey_count, journey_total], Color(1.0, 0.92, 0.48, 0.94)))
+	_world_stats_row.add_child(_world_stat_chip(_t("TITLE_STAT_REGION"), region_text, Color(0.62, 1.0, 0.74, 0.92)))
 	if best_restore > 0 and _world_stats_row.get_child_count() >= 2:
 		var relic_chip := _world_stats_row.get_child(1)
 		var relic_label := relic_chip.get_node_or_null("Margin/Box/Value") as Label
 		if relic_label != null:
-			relic_label.text = "%d 修  %d%%" % [restored_count, best_restore]
+			relic_label.text = _t("TITLE_STAT_RELIC_BEST") % [restored_count, best_restore]
 
 func _format_time(ts: int) -> String:
 	if ts <= 0:
-		return "未知"
+		return _t("TITLE_TIME_UNKNOWN")
 	var d := Time.get_datetime_dict_from_unix_time(ts)
 	return "%04d-%02d-%02d %02d:%02d" % [d["year"], d["month"], d["day"], d["hour"], d["minute"]]
 
@@ -575,6 +611,50 @@ func _world_stat_chip(title: String, value: String, tint: Color) -> Control:
 	value_label.clip_text = true
 	box.add_child(value_label)
 	return panel
+
+# i18n：把全部静态文案按当前语言重设一遍，并触发动态文案（世界标签/种子预览/统计）
+# 重算。构建后调用一次，并接到 _loc().language_changed —— 标题页打开期间切换语言也会
+# 立刻生效。
+func _retranslate() -> void:
+	if _tagline_label != null:
+		_tagline_label.text = _t("TITLE_TAGLINE")
+	if _settings_button != null:
+		_settings_button.text = _t("TITLE_SETTINGS")
+		_settings_button.tooltip_text = _t("TITLE_SETTINGS_TOOLTIP")
+	if _continue_button != null:
+		_continue_button.tooltip_text = _t("TITLE_CONTINUE_TOOLTIP")
+	if _fresh_button != null:
+		_fresh_button.text = _t("TITLE_CREATE_WORLD")
+		_fresh_button.tooltip_text = _t("TITLE_CREATE_TOOLTIP")
+	if _delete_button != null:
+		_delete_button.tooltip_text = _t("TITLE_DELETE_TOOLTIP")
+	if _delete_hint != null:
+		_delete_hint.text = _t("TITLE_DELETE_HINT")
+	if _autosave_note_label != null:
+		_autosave_note_label.text = _t("TITLE_AUTOSAVE_NOTE")
+	if _prev_button != null:
+		_prev_button.tooltip_text = _t("TITLE_PREV_WORLD_TOOLTIP")
+	if _next_button != null:
+		_next_button.tooltip_text = _t("TITLE_NEXT_WORLD_TOOLTIP")
+	if _new_seed_section_label != null:
+		_new_seed_section_label.text = _t("TITLE_NEW_SEED_LABEL")
+	if _new_seed_edit != null:
+		_new_seed_edit.placeholder_text = _t("TITLE_SEED_PLACEHOLDER")
+	if _random_seed_button != null:
+		_random_seed_button.text = _t("TITLE_RANDOM")
+		_random_seed_button.tooltip_text = _t("TITLE_RANDOM_TOOLTIP")
+	if _kind_button != null:
+		_kind_button.text = _t("TITLE_KIND_ISLAND")
+		_kind_button.tooltip_text = _t("TITLE_KIND_ISLAND_TOOLTIP")
+	# 含数值/随选择变化的文案（世界标签、统计卡片、保存状态、删除/继续按钮文案、种子预览）。
+	_refresh_world_labels()
+	_refresh_new_seed_preview()
+
+# 自动加载单例 Locale 比本标题页存活更久：销毁时断开信号，避免悬空回调。
+func _exit_tree() -> void:
+	var l := _loc()
+	if l != null and l.language_changed.is_connected(_retranslate):
+		l.language_changed.disconnect(_retranslate)
 
 func _clear_children(node: Node) -> void:
 	for child in node.get_children():

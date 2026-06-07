@@ -3,6 +3,7 @@ extends SceneTree
 #   godot --headless --path <项目> --script res://tests/test_title_world_catalog.gd
 
 const WorldCatalog = preload("res://scripts/WorldCatalog.gd")
+const GameSettings = preload("res://scripts/GameSettings.gd")
 
 var _f := 0
 var _main = null
@@ -27,6 +28,9 @@ func _process(_delta: float) -> bool:
 		OS.set_environment("VC_SAVE_DIR", _dir)
 		OS.set_environment("VC_SETTINGS_PATH", "user://tests/title_catalog/settings.json")
 		_clean_dir()
+		# 预置 language=zh 落盘（须在 _clean_dir 之后，settings.json 就在 _dir 内），
+		# Main._ready 的 Locale.init 会读到它 —— 断言里的中文文案不受运行机 OS 语言影响。
+		_seed_language("zh")
 		_write_world(1357, 11, 2, 1, 1)
 		_write_world(2468, 44, 6, 4, 3, 2, 80, true, 5)
 		_write_world(9753, 5, 4, 2, 2)
@@ -134,6 +138,11 @@ func _has_seed(worlds: Array, seed: int) -> bool:
 		if int(meta.get("seed", 0)) == seed:
 			return true
 	return false
+
+func _seed_language(lang: String) -> void:
+	var settings := GameSettings.load_settings()
+	settings["language"] = lang
+	GameSettings.save_settings(settings)
 
 func _send_key(keycode: int) -> void:
 	var event := InputEventKey.new()

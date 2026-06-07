@@ -4,10 +4,12 @@ extends SceneTree
 
 const TitleScreen = preload("res://scripts/TitleScreen.gd")
 const WorldCatalog = preload("res://scripts/WorldCatalog.gd")
+const Locale = preload("res://scripts/Locale.gd")
 
 var failed := 0
 var _screen: TitleScreen
 var _requested := []
+var _loc                  # i18n：种到 /root/Locale（zh），断言用 _loc.t(key) 与 UI 文案对齐
 
 func check(cond: bool, msg: String) -> void:
 	if cond:
@@ -17,15 +19,23 @@ func check(cond: bool, msg: String) -> void:
 		printerr("  FAIL ", msg)
 
 func _initialize() -> void:
+	# 直接构造 TitleScreen（不经 Main.tscn）时不会注入 Locale 自动加载；
+	# 这里手动种一个 /root/Locale（固定 zh）让界面 _loc() 找到它，断言对照同一文案表。
+	_loc = Locale.new()
+	_loc.name = "Locale"
+	root.add_child(_loc)
+	_loc.load_strings()
+	_loc.set_language("zh")
+
 	_screen = TitleScreen.new()
 	root.add_child(_screen)
 	_screen.new_world_requested.connect(func(seed: int, _kind: String): _requested.append(seed))
 	_screen.setup([], 1337, 1337)
 
 	check(_screen._new_seed_edit != null, "标题页包含新世界种子输入")
-	check(_screen._new_seed_edit.placeholder_text == "数字或文字种子", "标题页明确支持数字或文字种子")
+	check(_screen._new_seed_edit.placeholder_text == _loc.t("TITLE_SEED_PLACEHOLDER"), "标题页明确支持数字或文字种子")
 	check(_screen._random_seed_button != null, "标题页包含随机种子按钮")
-	check(_screen._fresh_button.text == "创建新世界", "标题页创建按钮使用发布向动作文案")
+	check(_screen._fresh_button.text == _loc.t("TITLE_CREATE_WORLD"), "标题页创建按钮使用发布向动作文案")
 	check(not _node_has_text(_screen, "preview") and not _node_has_text(_screen, "v0.1"), "标题页不暴露预览版开发文案")
 	check(_screen._world_cover != null, "标题页包含新世界封面")
 	check(_screen._world_cover.is_empty_preview(), "无存档时封面使用新世界预览状态")

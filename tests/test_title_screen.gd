@@ -2,6 +2,8 @@ extends SceneTree
 # 验证首屏标题入口：
 #   godot --headless --path <项目> --script res://tests/test_title_screen.gd
 
+const GameSettings = preload("res://scripts/GameSettings.gd")
+
 var _f := 0
 var _main = null
 var failed := 0
@@ -20,6 +22,9 @@ func _process(_delta: float) -> bool:
 		OS.set_environment("VC_NO_SAVE", "1")
 		OS.unset_environment("VC_SKIP_TITLE")
 		OS.set_environment("VC_SETTINGS_PATH", "user://tests/title_screen/settings.json")
+		# 预置 language=zh 落盘，Main._ready 的 Locale.init 会读到它 ——
+		# 这样断言里的中文文案（如“返回标题”）不受运行机 OS 语言影响（确定性回归）。
+		_seed_language("zh")
 		_main = load("res://scenes/Main.tscn").instantiate()
 		root.add_child(_main)
 	elif _f == 20:
@@ -58,6 +63,11 @@ func _process(_delta: float) -> bool:
 			printerr("❌ ", failed, " 个标题层测试失败")
 		return true
 	return false
+
+func _seed_language(lang: String) -> void:
+	var settings := GameSettings.load_settings()
+	settings["language"] = lang
+	GameSettings.save_settings(settings)
 
 func _left_click() -> InputEventMouseButton:
 	var event := InputEventMouseButton.new()
