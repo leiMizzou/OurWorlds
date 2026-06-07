@@ -4,6 +4,7 @@ extends SceneTree
 
 const WorldCatalog = preload("res://scripts/WorldCatalog.gd")
 const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
+const GameSettings = preload("res://scripts/GameSettings.gd")
 
 var _f := 0
 var _main = null
@@ -23,6 +24,9 @@ func _process(_delta: float) -> bool:
 		OS.set_environment("VC_SKIP_TITLE", "1")
 		OS.set_environment("VC_SEED", "5151")
 		OS.set_environment("VC_SETTINGS_PATH", "user://tests/world_map/settings.json")
+		# 预置 language=zh 落盘，Main._ready 的 Locale.init 会读到它 ——
+		# 这样断言里的中文文案不受运行机 OS 语言影响（确定性回归，同 test_pause_menu）。
+		_seed_language("zh")
 		_main = load("res://scenes/Main.tscn").instantiate()
 		root.add_child(_main)
 	elif _f == 35:
@@ -132,6 +136,11 @@ func _raise_repair_to(world, landmark: Vector3i, target_count: int) -> void:
 			if int(world.edited_blocks_near(landmark)) >= target_count:
 				return
 			world.set_block(landmark.x + dx, landmark.y + 1, landmark.z + dz, BlockLibrary.MOONSTONE_LAMP)
+
+func _seed_language(lang: String) -> void:
+	var settings := GameSettings.load_settings()
+	settings["language"] = lang
+	GameSettings.save_settings(settings)
 
 func _sampled_region_count(samples: Array) -> int:
 	var labels := {}

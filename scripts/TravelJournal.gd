@@ -1,19 +1,27 @@
 extends CanvasLayer
 # 旅行手记：把世界身份、旅程进度和探索记录收束成一个可随时查看的游戏内记录页。
+# i18n：经 _loc()（/root/Locale 节点路径）访问 Locale 自动加载单例，而不是裸标识符
+# `Locale` —— GDScript 在 `godot --script` 编译被 preload 的脚本时不会注入 autoload 全局名。
 
 signal close_requested
 
+# 旅程目标：key 是稳定标识（与 World 的旅程步骤对应，属逻辑数据），label_key 是 i18n key。
+# 旅程目标的“名称”本身是 UI 文案（探索/建造/地图……），随语言切换重译。
 const JOURNEY_META := [
-	{"key": "explore", "label": "探索"},
-	{"key": "select_material", "label": "选材"},
-	{"key": "open_palette", "label": "材料库"},
-	{"key": "place_block", "label": "建造"},
-	{"key": "use_template", "label": "模板"},
-	{"key": "open_map", "label": "地图"},
-	{"key": "discover_landmark", "label": "遗迹"},
-	{"key": "save_world", "label": "存档"},
+	{"key": "explore", "label_key": "JOURNEY_EXPLORE"},
+	{"key": "select_material", "label_key": "JOURNEY_SELECT_MATERIAL"},
+	{"key": "open_palette", "label_key": "JOURNEY_OPEN_PALETTE"},
+	{"key": "place_block", "label_key": "JOURNEY_PLACE_BLOCK"},
+	{"key": "use_template", "label_key": "JOURNEY_USE_TEMPLATE"},
+	{"key": "open_map", "label_key": "JOURNEY_OPEN_MAP"},
+	{"key": "discover_landmark", "label_key": "JOURNEY_DISCOVER_LANDMARK"},
+	{"key": "save_world", "label_key": "JOURNEY_SAVE_WORLD"},
 ]
 
+var _loc_cached: Node           # 缓存的 Locale 自动加载单例（经 /root/Locale 取，见 _loc()）
+var _title_label: Label         # 面板标题（重译用）
+var _close_button: Button       # 关闭按钮（重译用）
+var _last_data := {}            # 上次 _refresh 的数据，供 _retranslate 用当前语言重算动态文案
 var _world_label: Label
 var _summary_label: Label
 var _legacy_row: GridContainer
@@ -38,6 +46,22 @@ func open(data: Dictionary) -> void:
 
 func close() -> void:
 	visible = false
+
+# 经节点路径取 Locale 自动加载单例（不要用裸标识符 `Locale`）：见文件头注释与 PauseMenu。
+func _loc() -> Node:
+	if _loc_cached != null and is_instance_valid(_loc_cached):
+		return _loc_cached
+	var tree := get_tree()
+	if tree != null and tree.root != null:
+		_loc_cached = tree.root.get_node_or_null("Locale")
+	if _loc_cached == null:
+		_loc_cached = (load("res://scripts/Locale.gd") as GDScript).new()
+		_loc_cached.call("load_strings")
+	return _loc_cached
+
+func _t(key: String) -> String:
+	var l := _loc()
+	return l.t(key) if l != null else key
 
 func _build() -> void:
 	var root := Control.new()
@@ -82,20 +106,20 @@ func _build() -> void:
 	title_box.add_theme_constant_override("separation", 2)
 	header.add_child(title_box)
 
-	var title := Label.new()
-	title.text = "旅行手记"
-	title.add_theme_font_size_override("font_size", 28)
-	title.modulate = Color(1, 1, 1, 0.97)
-	title_box.add_child(title)
+	_title_label = Label.new()
+	_title_label.text = _t("JOURNAL_TITLE")
+	_title_label.add_theme_font_size_override("font_size", 28)
+	_title_label.modulate = Color(1, 1, 1, 0.97)
+	title_box.add_child(_title_label)
 
 	_world_label = Label.new()
 	_world_label.add_theme_font_size_override("font_size", 15)
 	_world_label.modulate = Color(0.82, 0.92, 1.0, 0.80)
 	title_box.add_child(_world_label)
 
-	var close_button := _button("关闭", Vector2(86, 36))
-	close_button.pressed.connect(func(): close_requested.emit())
-	header.add_child(close_button)
+	_close_button = _button(_t("JOURNAL_CLOSE"), Vector2(86, 36))
+	_close_button.pressed.connect(func(): close_requested.emit())
+	header.add_child(_close_button)
 
 	_summary_label = _body_label(14, Color(0.88, 0.95, 1.0, 0.86))
 	_summary_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -150,23 +174,42 @@ func _build() -> void:
 	_landmark_list.add_theme_constant_override("separation", 7)
 	scroll.add_child(_landmark_list)
 
+	# 语言切换时即时重译（手记打开期间切换也立刻生效）。
+	if not _loc().language_changed.is_connected(_retranslate):
+		_loc().language_changed.connect(_retranslate)
+
+# i18n：静态文案随当前语言重设；动态内容用上次数据重算（_refresh 全程走 _t）。
+func _retranslate() -> void:
+	if _title_label != null:
+		_title_label.text = _t("JOURNAL_TITLE")
+	if _close_button != null:
+		_close_button.text = _t("JOURNAL_CLOSE")
+	if not _last_data.is_empty():
+		_refresh(_last_data)
+
+# 自动加载单例 Locale 比本面板存活更久：销毁时断开信号，避免悬空回调。
+func _exit_tree() -> void:
+	if _loc_cached != null and is_instance_valid(_loc_cached) and _loc().language_changed.is_connected(_retranslate):
+		_loc().language_changed.disconnect(_retranslate)
+
 func _refresh(data: Dictionary) -> void:
-	var world_name := String(data.get("world_name", "未命名世界"))
+	_last_data = data.duplicate(true)
+	var world_name := String(data.get("world_name", _t("JOURNAL_WORLD_FALLBACK")))
 	var seed := int(data.get("seed", 0))
-	var region := String(data.get("region", "未知区域"))
+	var region := String(data.get("region", _t("REGION_UNKNOWN")))
 	var region_detail := String(data.get("region_detail", ""))
-	var region_text := "%s · %s" % [region, region_detail] if region_detail != "" else region
-	var weather := String(data.get("weather", "晴朗"))
-	var save_status := String(data.get("save_status", "已保存"))
+	var region_text := _t("JOURNAL_REGION_DETAIL") % [region, region_detail] if region_detail != "" else region
+	var weather := String(data.get("weather", _t("JOURNAL_WEATHER_FALLBACK")))
+	var save_status := String(data.get("save_status", _t("JOURNAL_SAVE_FALLBACK")))
 	var edit_count := int(data.get("edit_count", 0))
 	var region_count := int(data.get("region_count", 0))
 	var region_total := int(data.get("region_total", 0))
-	var region_progress := "    区域  %d/%d" % [region_count, region_total] if region_total > 0 else ""
+	var region_progress := _t("JOURNAL_REGION_PROGRESS") % [region_count, region_total] if region_total > 0 else ""
 	var home_distance := int(data.get("home_distance", 0))
-	var home_direction := String(data.get("home_direction", "附近"))
-	var home_text := "附近" if home_distance < 18 else "%s %dm" % [home_direction, home_distance]
-	_world_label.text = "%s  #%d" % [world_name, seed]
-	_summary_label.text = "当前区域  %s    天气  %s    归途  %s    存档  %s    改动  %d%s" % [region_text, weather, home_text, save_status, edit_count, region_progress]
+	var home_direction := String(data.get("home_direction", _t("JOURNAL_HOME_NEARBY")))
+	var home_text := _t("JOURNAL_HOME_NEARBY") if home_distance < 18 else _t("JOURNAL_HOME_DIR") % [home_direction, home_distance]
+	_world_label.text = _t("JOURNAL_WORLD_LABEL") % [world_name, seed]
+	_summary_label.text = _t("JOURNAL_SUMMARY") % [region_text, weather, home_text, save_status, edit_count, region_progress]
 	_refresh_legacy(data)
 	_refresh_regions(data)
 	_refresh_journey(data)
@@ -188,10 +231,10 @@ func _refresh_legacy(data: Dictionary) -> void:
 	var journey_total: int = maxi(1, int(data.get("journey_total", JOURNEY_META.size())))
 	var restored: int = _restored_count(landmarks)
 	var best: int = _best_restore_percent(landmarks)
-	_legacy_row.add_child(_legacy_chip("建造", "%d 格" % edit_count, Color(1.0, 0.74, 0.38, 0.92)))
-	_legacy_row.add_child(_legacy_chip("区域", "%d/%d" % [region_count, region_total], Color(0.62, 1.0, 0.74, 0.92)))
-	_legacy_row.add_child(_legacy_chip("旅程", "%d/%d" % [journey_count, journey_total], Color(1.0, 0.92, 0.48, 0.94)))
-	_legacy_row.add_child(_legacy_chip("修复", "%d/%d  最佳 %d%%" % [restored, landmarks.size(), best], Color(0.66, 0.90, 1.0, 0.94)))
+	_legacy_row.add_child(_legacy_chip(_t("JOURNAL_CHIP_BUILD"), _t("JOURNAL_CHIP_BUILD_VALUE") % edit_count, Color(1.0, 0.74, 0.38, 0.92)))
+	_legacy_row.add_child(_legacy_chip(_t("JOURNAL_CHIP_REGION"), "%d/%d" % [region_count, region_total], Color(0.62, 1.0, 0.74, 0.92)))
+	_legacy_row.add_child(_legacy_chip(_t("JOURNAL_CHIP_JOURNEY"), "%d/%d" % [journey_count, journey_total], Color(1.0, 0.92, 0.48, 0.94)))
+	_legacy_row.add_child(_legacy_chip(_t("JOURNAL_CHIP_REPAIR"), _t("JOURNAL_CHIP_REPAIR_VALUE") % [restored, landmarks.size(), best], Color(0.66, 0.90, 1.0, 0.94)))
 
 func _refresh_regions(data: Dictionary) -> void:
 	var total := int(data.get("region_total", 0))
@@ -208,16 +251,16 @@ func _refresh_regions(data: Dictionary) -> void:
 		return
 	_region_label.visible = true
 	_region_row.visible = true
-	_region_label.text = "区域足迹  %d/%d" % [regions.size(), total]
+	_region_label.text = _t("JOURNAL_REGION_FOOTPRINT") % [regions.size(), total]
 	_clear_children(_region_row)
 	if regions.is_empty():
-		_region_row.add_child(_region_chip("尚未记录", false))
+		_region_row.add_child(_region_chip(_t("JOURNAL_REGION_NONE"), false))
 		return
 	for label in regions:
 		_region_row.add_child(_region_chip(label, true))
 	var undiscovered := total - regions.size()
 	if undiscovered > 0:
-		_region_row.add_child(_region_chip("未踏足 %d" % undiscovered, false))
+		_region_row.add_child(_region_chip(_t("JOURNAL_REGION_UNVISITED") % undiscovered, false))
 
 func _refresh_journey(data: Dictionary) -> void:
 	var done := {}
@@ -226,34 +269,35 @@ func _refresh_journey(data: Dictionary) -> void:
 		for raw in raw_steps:
 			done[str(raw)] = true
 	var total := maxi(1, int(data.get("journey_total", JOURNEY_META.size())))
-	_journey_label.text = "旅程进度  %d/%d" % [done.size(), total]
+	_journey_label.text = _t("JOURNAL_PROGRESS") % [done.size(), total]
 	_clear_children(_journey_row)
 	for raw_meta in JOURNEY_META:
 		var meta: Dictionary = raw_meta
 		var key := String(meta.get("key", ""))
-		var label := String(meta.get("label", "目标"))
+		var label_key := String(meta.get("label_key", ""))
+		var label := _t(label_key) if label_key != "" else _t("JOURNAL_GOAL_FALLBACK")
 		_journey_row.add_child(_journey_chip(label, done.has(key)))
 
 func _refresh_clue(data: Dictionary) -> void:
 	var distance := int(data.get("nearby_distance", -1))
 	var direction := String(data.get("nearby_direction", ""))
 	if distance >= 0 and direction != "":
-		_clue_label.text = "线索  %s  约 %dm 有未记录遗迹" % [direction, distance]
+		_clue_label.text = _t("JOURNAL_CLUE_FOUND") % [direction, distance]
 	else:
-		_clue_label.text = "线索  暂无新的遗迹回响"
+		_clue_label.text = _t("JOURNAL_CLUE_NONE")
 
 func _refresh_restoration_target(data: Dictionary) -> void:
 	var target := _target_data(data)
 	if target.is_empty():
-		_restoration_target_label.text = "修复目标  尚未记录遗迹"
+		_restoration_target_label.text = _t("JOURNAL_TARGET_NONE")
 		return
-	var label := String(target.get("label", "古遗迹"))
+	var label := String(target.get("label", _t("LANDMARK_FALLBACK")))
 	var distance := int(target.get("distance", 0))
-	var direction := String(target.get("direction", "附近"))
-	var nav := "附近" if distance < 18 else "%s %dm" % [direction, distance]
+	var direction := String(target.get("direction", _t("JOURNAL_HOME_NEARBY")))
+	var nav := _t("JOURNAL_HOME_NEARBY") if distance < 18 else _t("JOURNAL_HOME_DIR") % [direction, distance]
 	var percent := clampi(int(target.get("restore_percent", 0)), 0, 100)
-	var status := "已修复" if bool(target.get("restore_complete", false)) or percent >= 100 else String(target.get("restore_label", "待修复"))
-	_restoration_target_label.text = "修复目标  %s  %s · %s %d%%" % [nav, label, status, percent]
+	var status := _t("JOURNAL_TARGET_DONE") if bool(target.get("restore_complete", false)) or percent >= 100 else String(target.get("restore_label", _t("JOURNAL_TARGET_TODO")))
+	_restoration_target_label.text = _t("JOURNAL_TARGET") % [nav, label, status, percent]
 
 func _refresh_landmarks(data: Dictionary) -> void:
 	var raw_entries: Variant = data.get("landmarks", [])
@@ -263,18 +307,18 @@ func _refresh_landmarks(data: Dictionary) -> void:
 	var target := _target_data(data)
 	var target_key := String(target.get("key", ""))
 	var restored := _restored_count(entries)
-	_landmark_count_label.text = "遗迹记录  %d    已修复  %d" % [entries.size(), restored]
+	_landmark_count_label.text = _t("JOURNAL_LANDMARK_COUNT") % [entries.size(), restored]
 	_clear_children(_landmark_list)
 	if entries.is_empty():
-		_landmark_list.add_child(_empty_label("尚未记录遗迹"))
+		_landmark_list.add_child(_empty_label(_t("JOURNAL_LANDMARK_EMPTY")))
 		return
 	for raw in entries:
 		var entry: Dictionary = raw
 		_landmark_list.add_child(_landmark_row(
-			String(entry.get("label", "古遗迹")),
+			String(entry.get("label", _t("LANDMARK_FALLBACK"))),
 			String(entry.get("nav_label", entry.get("pos", ""))),
 			int(entry.get("restore_percent", 0)),
-			String(entry.get("restore_label", "待修复")),
+			String(entry.get("restore_label", _t("JOURNAL_TARGET_TODO"))),
 			target_key != "" and String(entry.get("key", "")) == target_key,
 			String(entry.get("archive", ""))
 			))
@@ -316,7 +360,7 @@ func _journey_chip(label: String, done: bool) -> Control:
 		6
 	))
 	var text := Label.new()
-	text.text = ("已 " if done else "待 ") + label
+	text.text = (_t("JOURNAL_GOAL_DONE") if done else _t("JOURNAL_GOAL_TODO")) % label
 	text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	text.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	text.add_theme_font_size_override("font_size", 14)
@@ -369,12 +413,12 @@ func _landmark_row(label: String, pos: String, restore_percent: int, restore_lab
 	box.add_child(row)
 
 	var name_label := _body_label(15, Color(0.94, 0.98, 1.0, 0.94))
-	name_label.text = ("目标  " if focused else "") + label
+	name_label.text = (_t("JOURNAL_LANDMARK_FOCUS") if focused else "") + label
 	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(name_label)
 
 	var restore_text := _body_label(13, _restore_color(restore_percent))
-	restore_text.text = "%s %d%%" % [restore_label, clampi(restore_percent, 0, 100)]
+	restore_text.text = _t("JOURNAL_LANDMARK_RESTORE") % [restore_label, clampi(restore_percent, 0, 100)]
 	restore_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	restore_text.custom_minimum_size = Vector2(118, 0)
 	row.add_child(restore_text)

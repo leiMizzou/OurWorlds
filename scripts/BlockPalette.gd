@@ -1,5 +1,7 @@
 extends CanvasLayer
 # 创造模式材料库：展示全部可放置方块，点击后回到建造。
+# i18n：面板 chrome（标题/关闭/最近/搜索框/分类提示/空状态）走 _loc()（/root/Locale 节点路径）双语化。
+# 方块名、分类名（来自 BlockLibrary，属世界内容）与特性/用途标签（块描述，兼作中文搜索索引）保持中文不译。
 
 const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
 
@@ -7,6 +9,9 @@ signal block_selected(id: int)
 signal close_requested
 
 var lib: BlockLibrary
+var _loc_cached: Node           # 缓存的 Locale 自动加载单例（经 /root/Locale 取，见 _loc()）
+var _title_label: Label         # 面板标题（重译用）
+var _close_button: Button       # 关闭按钮（重译用）
 var _panel: PanelContainer
 var _grid: GridContainer
 var _search_edit: LineEdit
@@ -88,6 +93,47 @@ func open(selected_id: int) -> void:
 func close() -> void:
 	visible = false
 
+# 经节点路径取 Locale 自动加载单例（不要用裸标识符 `Locale`）：见文件头注释与 PauseMenu。
+func _loc() -> Node:
+	if _loc_cached != null and is_instance_valid(_loc_cached):
+		return _loc_cached
+	var tree := get_tree()
+	if tree != null and tree.root != null:
+		_loc_cached = tree.root.get_node_or_null("Locale")
+	if _loc_cached == null:
+		_loc_cached = (load("res://scripts/Locale.gd") as GDScript).new()
+		_loc_cached.call("load_strings")
+	return _loc_cached
+
+func _t(key: String) -> String:
+	var l := _loc()
+	return l.t(key) if l != null else key
+
+# i18n：重设面板 chrome 文案（标题/关闭/搜索框/最近页签/空状态/分类提示）。
+# 方块名、分类名、特性与用途标签是内容/搜索索引，由 _refresh_all 在当前数据下重建即可。
+func _retranslate() -> void:
+	if _title_label != null:
+		_title_label.text = _t("PALETTE_TITLE")
+	if _close_button != null:
+		_close_button.text = _t("PALETTE_CLOSE")
+	if _empty_label != null:
+		_empty_label.text = _t("PALETTE_EMPTY")
+	if _search_edit != null:
+		_search_edit.placeholder_text = _t("PALETTE_SEARCH_PLACEHOLDER")
+		_search_edit.tooltip_text = _t("PALETTE_SEARCH_TOOLTIP")
+	if _tab_buttons.has("recent") and is_instance_valid(_tab_buttons["recent"]):
+		(_tab_buttons["recent"] as Button).text = _t("PALETTE_TAB_RECENT")
+	for id in _tab_buttons.keys():
+		var b: Button = _tab_buttons[id]
+		if b != null and is_instance_valid(b):
+			b.tooltip_text = _category_tooltip(String(id))
+	_refresh_all()
+
+# 自动加载单例 Locale 比本面板存活更久：销毁时断开信号，避免悬空回调。
+func _exit_tree() -> void:
+	if _loc_cached != null and is_instance_valid(_loc_cached) and _loc().language_changed.is_connected(_retranslate):
+		_loc().language_changed.disconnect(_retranslate)
+
 func _build() -> void:
 	_style_cell = _panel_style(Color(0.06, 0.075, 0.08, 0.84), Color(1, 1, 1, 0.12), 1)
 	_style_selected = _panel_style(Color(0.13, 0.12, 0.065, 0.94), Color(1.0, 0.82, 0.24, 0.88), 2)
@@ -129,18 +175,18 @@ func _build() -> void:
 	header.add_theme_constant_override("separation", 10)
 	box.add_child(header)
 
-	var title := Label.new()
-	title.text = "材料库"
-	title.add_theme_font_size_override("font_size", 28)
-	title.modulate = Color(1, 1, 1, 0.97)
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(title)
+	_title_label = Label.new()
+	_title_label.text = _t("PALETTE_TITLE")
+	_title_label.add_theme_font_size_override("font_size", 28)
+	_title_label.modulate = Color(1, 1, 1, 0.97)
+	_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(_title_label)
 
 	header.add_child(_build_detail_panel())
 
-	var close_button := _top_button("关闭")
-	close_button.pressed.connect(func(): close_requested.emit())
-	header.add_child(close_button)
+	_close_button = _top_button(_t("PALETTE_CLOSE"))
+	_close_button.pressed.connect(func(): close_requested.emit())
+	header.add_child(_close_button)
 
 	box.add_child(_build_tabs())
 	box.add_child(_build_search())
@@ -156,13 +202,17 @@ func _build() -> void:
 		_grid.add_child(cell)
 
 	_empty_label = Label.new()
-	_empty_label.text = "没有匹配材料"
+	_empty_label.text = _t("PALETTE_EMPTY")
 	_empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_empty_label.add_theme_font_size_override("font_size", 15)
 	_empty_label.modulate = Color(0.82, 0.88, 0.92, 0.68)
 	_empty_label.visible = false
 	box.add_child(_empty_label)
 	_refresh_all()
+
+	# 语言切换时即时重译（材料库打开期间切换也立刻生效）。
+	if not _loc().language_changed.is_connected(_retranslate):
+		_loc().language_changed.connect(_retranslate)
 
 func _build_detail_panel() -> Control:
 	var panel := PanelContainer.new()
@@ -215,7 +265,7 @@ func _build_detail_panel() -> Control:
 func _build_tabs() -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
-	var recent := _tab_button("最近", "recent")
+	var recent := _tab_button(_t("PALETTE_TAB_RECENT"), "recent")
 	row.add_child(recent)
 	for cat in lib.creative_categories():
 		var meta: Dictionary = cat
@@ -236,28 +286,28 @@ func _tab_button(label: String, id: String) -> Button:
 func _category_tooltip(id: String) -> String:
 	match id:
 		"recent":
-			return "最近用过的材料（最多 8 个）"
+			return _t("PALETTE_TOOLTIP_RECENT")
 		"all":
-			return "全部可放置材料"
+			return _t("PALETTE_TOOLTIP_ALL")
 		"terrain":
-			return "地形与自然地表：草、土、石、沙、雪、水等"
+			return _t("PALETTE_TOOLTIP_TERRAIN")
 		"building":
-			return "建筑结构：砖石、金属面板、木材、玻璃、光源"
+			return _t("PALETTE_TOOLTIP_BUILDING")
 		"nature":
-			return "植被装饰：树叶、野花、草丛、蘑菇、芦苇"
+			return _t("PALETTE_TOOLTIP_NATURE")
 		"decor":
-			return "装饰与光源：灯具、玻璃、晶体、鎏金"
+			return _t("PALETTE_TOOLTIP_DECOR")
 		"ores":
-			return "矿物资源：煤、铁、铜、蓝晶"
+			return _t("PALETTE_TOOLTIP_ORES")
 		_:
-			return "材料分类"
+			return _t("PALETTE_TOOLTIP_DEFAULT")
 
 func _build_search() -> Control:
 	_search_edit = LineEdit.new()
-	_search_edit.placeholder_text = "搜索　名称 / 拼音(cao) / 英文(grass) / 用途(夜景) / #编号"
+	_search_edit.placeholder_text = _t("PALETTE_SEARCH_PLACEHOLDER")
 	_search_edit.clear_button_enabled = true
 	_search_edit.custom_minimum_size = Vector2(0, 36)
-	_search_edit.tooltip_text = "支持名称、拼音首字母、英文别名、用途和特性；↑↓←→ 浏览，回车选定"
+	_search_edit.tooltip_text = _t("PALETTE_SEARCH_TOOLTIP")
 	_search_edit.add_theme_font_size_override("font_size", 15)
 	_search_edit.text_changed.connect(_on_search_changed)
 	_search_edit.text_submitted.connect(_on_search_submitted)
@@ -550,7 +600,7 @@ func _category_label_for(id: int) -> String:
 		if labels.size() >= 2:
 			break
 	if labels.is_empty():
-		return "方块"
+		return _t("PALETTE_BLOCK_FALLBACK")
 	return " / ".join(labels)
 
 func _block_traits_label(id: int) -> String:

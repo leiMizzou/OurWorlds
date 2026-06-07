@@ -1,10 +1,26 @@
 extends CanvasLayer
 # 世界地图：暂停式导航面板，展示玩家、归途、遗迹和附近线索。
+# i18n：经 _loc()（/root/Locale 节点路径）访问 Locale 自动加载单例，而不是裸标识符
+# `Locale` —— GDScript 在 `godot --script` 编译被 preload 的脚本时不会注入 autoload 全局名。
 
 signal close_requested
 
 const WorldMapCanvas = preload("res://scripts/WorldMapCanvas.gd")
 
+# 图例项：[i18n key, 色块颜色]（文案随语言重译，颜色固定）。
+const _LEGEND := [
+	["MAP_LEGEND_TERRAIN", Color(0.34, 0.64, 0.38, 0.82)],
+	["MAP_LEGEND_PLAYER", Color(0.96, 0.98, 1.0, 0.96)],
+	["MAP_LEGEND_HOME", Color(0.44, 0.92, 1.0, 0.92)],
+	["MAP_LEGEND_RELIC", Color(1.0, 0.82, 0.30, 0.94)],
+	["MAP_LEGEND_REPAIR", Color(0.62, 1.0, 0.76, 0.94)],
+	["MAP_LEGEND_CLUE", Color(0.72, 1.0, 0.66, 0.92)],
+]
+
+var _loc_cached: Node           # 缓存的 Locale 自动加载单例（经 /root/Locale 取，见 _loc()）
+var _title_label: Label         # 面板标题（重译用）
+var _legend_labels := []        # [{ "label": Label, "key": "MAP_LEGEND_..." }]，重译用
+var _last_data := {}            # 上次 _refresh 的数据，供 _retranslate 用当前语言重算动态文案
 var _anim_root: Control
 var _panel: PanelContainer
 var _tween: Tween
@@ -37,6 +53,22 @@ func close() -> void:
 		_anim_root.modulate.a = 1.0
 	if _panel != null:
 		_panel.scale = Vector2.ONE
+
+# 经节点路径取 Locale 自动加载单例（不要用裸标识符 `Locale`）：见文件头注释与 PauseMenu。
+func _loc() -> Node:
+	if _loc_cached != null and is_instance_valid(_loc_cached):
+		return _loc_cached
+	var tree := get_tree()
+	if tree != null and tree.root != null:
+		_loc_cached = tree.root.get_node_or_null("Locale")
+	if _loc_cached == null:
+		_loc_cached = (load("res://scripts/Locale.gd") as GDScript).new()
+		_loc_cached.call("load_strings")
+	return _loc_cached
+
+func _t(key: String) -> String:
+	var l := _loc()
+	return l.t(key) if l != null else key
 
 func _make_tween() -> Tween:
 	if _tween != null and _tween.is_running():
@@ -108,20 +140,20 @@ func _build() -> void:
 	title_box.add_theme_constant_override("separation", 2)
 	header.add_child(title_box)
 
-	var title := Label.new()
-	title.text = "世界地图"
-	title.add_theme_font_size_override("font_size", 28)
-	title.modulate = Color(1, 1, 1, 0.97)
-	title_box.add_child(title)
+	_title_label = Label.new()
+	_title_label.text = _t("MAP_TITLE")
+	_title_label.add_theme_font_size_override("font_size", 28)
+	_title_label.modulate = Color(1, 1, 1, 0.97)
+	title_box.add_child(_title_label)
 
 	_world_label = Label.new()
 	_world_label.add_theme_font_size_override("font_size", 15)
 	_world_label.modulate = Color(0.82, 0.92, 1.0, 0.80)
 	title_box.add_child(_world_label)
 
-	_close_button = _button("关闭", Vector2(86, 36))
+	_close_button = _button(_t("MAP_CLOSE"), Vector2(86, 36))
 	_close_button.focus_mode = Control.FOCUS_ALL
-	_close_button.tooltip_text = "关闭地图（Esc / M）"
+	_close_button.tooltip_text = _t("MAP_CLOSE_TOOLTIP")
 	_close_button.pressed.connect(func(): close_requested.emit())
 	header.add_child(_close_button)
 
@@ -148,38 +180,59 @@ func _build() -> void:
 	legend.alignment = BoxContainer.ALIGNMENT_CENTER
 	legend.add_theme_constant_override("separation", 8)
 	box.add_child(legend)
-	legend.add_child(_legend_chip("地貌", Color(0.34, 0.64, 0.38, 0.82)))
-	legend.add_child(_legend_chip("玩家", Color(0.96, 0.98, 1.0, 0.96)))
-	legend.add_child(_legend_chip("归途", Color(0.44, 0.92, 1.0, 0.92)))
-	legend.add_child(_legend_chip("遗迹", Color(1.0, 0.82, 0.30, 0.94)))
-	legend.add_child(_legend_chip("修复", Color(0.62, 1.0, 0.76, 0.94)))
-	legend.add_child(_legend_chip("线索", Color(0.72, 1.0, 0.66, 0.92)))
+	for raw in _LEGEND:
+		var entry: Array = raw
+		legend.add_child(_legend_chip(String(entry[0]), entry[1]))
+
+	# 语言切换时即时重译（地图打开期间切换也立刻生效）。
+	if not _loc().language_changed.is_connected(_retranslate):
+		_loc().language_changed.connect(_retranslate)
+
+# i18n：静态文案随当前语言重设；动态内容用上次数据重算（_refresh 全程走 _t）。
+func _retranslate() -> void:
+	if _title_label != null:
+		_title_label.text = _t("MAP_TITLE")
+	if _close_button != null:
+		_close_button.text = _t("MAP_CLOSE")
+		_close_button.tooltip_text = _t("MAP_CLOSE_TOOLTIP")
+	for entry in _legend_labels:
+		var label: Label = entry.get("label")
+		if label != null and is_instance_valid(label):
+			label.text = _t(str(entry.get("key", "")))
+	if not _last_data.is_empty():
+		_refresh(_last_data)
+
+# 自动加载单例 Locale 比本面板存活更久：销毁时断开信号，避免悬空回调。
+func _exit_tree() -> void:
+	if _loc_cached != null and is_instance_valid(_loc_cached) and _loc().language_changed.is_connected(_retranslate):
+		_loc().language_changed.disconnect(_retranslate)
 
 func _refresh(data: Dictionary) -> void:
-	var world_name := String(data.get("world_name", "未命名世界"))
+	_last_data = data.duplicate(true)
+	var world_name := String(data.get("world_name", _t("MAP_WORLD_FALLBACK")))
 	var seed := int(data.get("seed", 0))
-	var region := String(data.get("region", "未知区域"))
+	var region := String(data.get("region", _t("REGION_UNKNOWN")))
 	var region_detail := String(data.get("region_detail", ""))
-	var region_text := "%s · %s" % [region, region_detail] if region_detail != "" else region
-	var weather := String(data.get("weather", "晴朗"))
+	var region_text := _t("MAP_REGION_DETAIL") % [region, region_detail] if region_detail != "" else region
+	var weather := String(data.get("weather", _t("MAP_WEATHER_FALLBACK")))
 	var home_distance := int(data.get("home_distance", 0))
-	var home_direction := String(data.get("home_direction", "附近"))
-	var home_text := "附近" if home_distance < 18 else "%s %dm" % [home_direction, home_distance]
+	var home_direction := String(data.get("home_direction", _t("MAP_HOME_NEARBY")))
+	var home_text := _t("MAP_HOME_NEARBY") if home_distance < 18 else _t("MAP_HOME_DIR") % [home_direction, home_distance]
 	var landmarks: Array = data.get("landmarks", []) if typeof(data.get("landmarks", [])) == TYPE_ARRAY else []
 	var best_restore := _best_restore_percent(landmarks)
 	var restored := _restored_count(landmarks)
 	var region_count := int(data.get("region_count", 0))
 	var region_total := int(data.get("region_total", 0))
-	var region_progress := "    区域  %d/%d" % [region_count, region_total] if region_total > 0 else ""
-	_world_label.text = "%s  #%d" % [world_name, seed]
-	_summary_label.text = "当前区域  %s    天气  %s    归途  %s    遗迹  %d    已修复  %d    最佳  %d%%%s" % [region_text, weather, home_text, landmarks.size(), restored, best_restore, region_progress]
+	var region_progress := _t("MAP_REGION_PROGRESS") % [region_count, region_total] if region_total > 0 else ""
+	_world_label.text = _t("MAP_WORLD_LABEL") % [world_name, seed]
+	_summary_label.text = _t("MAP_SUMMARY") % [region_text, weather, home_text, landmarks.size(), restored, best_restore, region_progress]
 	if _map_canvas != null:
 		_map_canvas.set_map_data(data)
-		_stats_label.text = "坐标  %s    地图半径  %dm    修复目标  %s    附近线索  %s" % [
+		_stats_label.text = _t("MAP_STATS") % [
 			_format_pos(_vec3(data.get("player_pos", Vector3.ZERO))),
 			int(round(_map_canvas.map_radius())),
 			_target_text(data),
-			("%dm %s" % [int(data.get("nearby_distance", 0)), String(data.get("nearby_direction", ""))]) if bool(data.get("nearby_valid", false)) else "无",
+			_t("MAP_NAV_CLUE_VALUE") % [int(data.get("nearby_distance", 0)), String(data.get("nearby_direction", ""))] if bool(data.get("nearby_valid", false)) else _t("MAP_NONE"),
 		]
 		_refresh_nav_cards(data)
 
@@ -189,26 +242,26 @@ func _refresh_nav_cards(data: Dictionary) -> void:
 	_clear_children(_nav_row)
 	var radius := int(round(_map_canvas.map_radius())) if _map_canvas != null else 0
 	var target_text := _target_text(data)
-	var nearby_text := ("%dm %s" % [int(data.get("nearby_distance", 0)), String(data.get("nearby_direction", ""))]) if bool(data.get("nearby_valid", false)) else "无"
-	_nav_row.add_child(_nav_chip("坐标", _format_pos(_vec3(data.get("player_pos", Vector3.ZERO))), Color(0.86, 0.94, 1.0, 0.90), "当前玩家所在世界坐标 X / Y / Z"))
-	_nav_row.add_child(_nav_chip("范围", "%dm 半径" % radius, Color(0.74, 0.90, 1.0, 0.90), "地图覆盖的世界半径（米）"))
-	_nav_row.add_child(_nav_chip("修复目标", target_text, Color(1.0, 0.84, 0.34, 0.94), "当前推荐修复的遗迹方向、距离与进度"))
-	_nav_row.add_child(_nav_chip("附近线索", nearby_text, Color(0.72, 1.0, 0.66, 0.92), "最近一处线索的距离与方向"))
+	var nearby_text := _t("MAP_NAV_CLUE_VALUE") % [int(data.get("nearby_distance", 0)), String(data.get("nearby_direction", ""))] if bool(data.get("nearby_valid", false)) else _t("MAP_NONE")
+	_nav_row.add_child(_nav_chip(_t("MAP_NAV_COORDS"), _format_pos(_vec3(data.get("player_pos", Vector3.ZERO))), Color(0.86, 0.94, 1.0, 0.90), _t("MAP_NAV_COORDS_NOTE")))
+	_nav_row.add_child(_nav_chip(_t("MAP_NAV_RANGE"), _t("MAP_NAV_RANGE_VALUE") % radius, Color(0.74, 0.90, 1.0, 0.90), _t("MAP_NAV_RANGE_NOTE")))
+	_nav_row.add_child(_nav_chip(_t("MAP_NAV_TARGET"), target_text, Color(1.0, 0.84, 0.34, 0.94), _t("MAP_NAV_TARGET_NOTE")))
+	_nav_row.add_child(_nav_chip(_t("MAP_NAV_CLUE"), nearby_text, Color(0.72, 1.0, 0.66, 0.92), _t("MAP_NAV_CLUE_NOTE")))
 
 func _target_text(data: Dictionary) -> String:
 	var raw: Variant = data.get("restoration_target", {})
 	if typeof(raw) != TYPE_DICTIONARY:
-		return "无"
+		return _t("MAP_NONE")
 	var target: Dictionary = raw
 	if target.is_empty():
-		return "无"
-	var label := String(target.get("label", "古遗迹"))
+		return _t("MAP_NONE")
+	var label := String(target.get("label", _t("LANDMARK_FALLBACK")))
 	var distance := int(target.get("distance", 0))
-	var direction := String(target.get("direction", "附近"))
+	var direction := String(target.get("direction", _t("MAP_HOME_NEARBY")))
 	var percent := clampi(int(target.get("restore_percent", 0)), 0, 100)
-	var nav := "附近" if distance < 18 else "%s %dm" % [direction, distance]
-	var status := "已修复" if bool(target.get("restore_complete", false)) or percent >= 100 else String(target.get("restore_label", "待修复"))
-	return "%s %s %s %d%%" % [nav, label, status, percent]
+	var nav := _t("MAP_HOME_NEARBY") if distance < 18 else _t("MAP_HOME_DIR") % [direction, distance]
+	var status := _t("MAP_TARGET_DONE") if bool(target.get("restore_complete", false)) or percent >= 100 else String(target.get("restore_label", _t("MAP_TARGET_TODO")))
+	return _t("MAP_TARGET") % [nav, label, status, percent]
 
 func _format_pos(pos: Vector3) -> String:
 	return "%d, %d, %d" % [int(round(pos.x)), int(round(pos.y)), int(round(pos.z))]
@@ -236,7 +289,8 @@ func _vec3(value: Variant) -> Vector3:
 		return Vector3(p.x, p.y, p.z)
 	return Vector3.ZERO
 
-func _legend_chip(label: String, color: Color) -> Control:
+# label_key 是 i18n key；显示文案经 _t 取，并登记到重译清单。
+func _legend_chip(label_key: String, color: Color) -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
 	var swatch := ColorRect.new()
@@ -244,8 +298,9 @@ func _legend_chip(label: String, color: Color) -> Control:
 	swatch.custom_minimum_size = Vector2(14, 14)
 	row.add_child(swatch)
 	var text := _body_label(13, Color(0.86, 0.92, 0.96, 0.74))
-	text.text = label
+	text.text = _t(label_key)
 	row.add_child(text)
+	_legend_labels.append({"label": text, "key": label_key})
 	return row
 
 func _nav_chip(title: String, value: String, tint: Color, note: String = "") -> Control:

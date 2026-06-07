@@ -22,6 +22,9 @@ func _process(_delta: float) -> bool:
 		OS.set_environment("VC_NO_SAVE", "1")
 		OS.set_environment("VC_SKIP_TITLE", "1")
 		OS.set_environment("VC_SETTINGS_PATH", "user://tests/block_palette/settings.json")
+		# 预置 language=zh 落盘：方块名/特性/用途与中文搜索保持中文（内容不译），
+		# 断言确定性不受运行机 OS 语言影响（同 test_pause_menu）。
+		_seed_language("zh")
 		_main = load("res://scenes/Main.tscn").instantiate()
 		root.add_child(_main)
 	elif _f == 35:
@@ -160,6 +163,11 @@ func _process(_delta: float) -> bool:
 			printerr("❌ ", failed, " 个材料库测试失败")
 		return true
 	return false
+
+func _seed_language(lang: String) -> void:
+	var settings := GameSettings.load_settings()
+	settings["language"] = lang
+	GameSettings.save_settings(settings)
 
 func _send_key(keycode: int) -> void:
 	var event := InputEventKey.new()
