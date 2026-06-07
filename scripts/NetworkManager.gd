@@ -6,6 +6,7 @@ extends Node
 #   - 服务器直接持有 WorldData（无 World 节点、不造网格）；HOST/CLIENT 用 World._data。
 const WorldData = preload("res://scripts/WorldData.gd")
 const Chunk = preload("res://scripts/Chunk.gd")
+const AvatarLook = preload("res://scripts/AvatarLook.gd")
 
 enum Mode { OFFLINE, SERVER, CLIENT, HOST }
 
@@ -249,6 +250,8 @@ func _spawn_avatar(eid: String) -> Node3D:
 		if found != "":
 			nm = found
 		node.set_label(nm)
+	if node.has_method("set_look"):
+		node.set_look(AvatarLook.look_for(eid))   # 进树前设好，_ready 即按此身份造型
 	if world != null:
 		world.add_child(node)
 	else:
