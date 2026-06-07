@@ -42,8 +42,8 @@ existing TCP contract (§1) is unchanged.
 | Local endpoint (testing) | `ws://127.0.0.1:<OW_AGENT_GATEWAY_PORT>` (default `8972`) |
 | Framing | Same **NDJSON** envelope as TCP: one JSON object per WebSocket message, UTF-8. |
 | First frame | **Auth handshake** (see §1R.1). All subsequent frames are identical to the TCP tool envelopes. |
-| Concurrency | Up to `OW_AGENT_MAX` simultaneous connections (server-configurable, default 10). |
-| Rate limiting | `OW_AGENT_RATE` max calls per agent per minute (server-configurable). |
+| Concurrency | Up to `OW_AGENT_MAX` simultaneous connections (server-configurable, default 8). |
+| Rate limiting | `OW_AGENT_RATE` max calls per agent per second (server-configurable, default 30). |
 
 ### 1R.1 Auth handshake
 
@@ -62,9 +62,9 @@ first message (before any tool call):
 **Responses:**
 
 ```json
-{"id": 0, "ok": true, "result": {}}
+{"id": 0, "ok": true, "result": {"eid": "agent-1", "spawn": [x, y, z]}}
 ```
-Auth accepted — the connection is now a live agent entity. Proceed with normal tool calls.
+Auth accepted — the connection is now a live agent entity. `eid` is the assigned entity id; `spawn` is the initial world position `[x, y, z]`. Proceed with normal tool calls.
 
 ```json
 {"id": 0, "ok": false, "error": "unauthorized"}

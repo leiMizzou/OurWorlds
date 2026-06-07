@@ -12,8 +12,8 @@
 # Agent Gateway 服务端环境变量（在启动脚本 / deploy/run-public.sh 里设置，不要写进本文件）：
 #   OW_AGENT_GATEWAY_PORT=8972          # AgentGateway 监听端口（默认 8972）
 #   OW_AGENT_TOKENS=token1,token2       # 逗号分隔的有效连接令牌（PLACEHOLDER，勿提交真实值）
-#   OW_AGENT_MAX=10                     # 最大并发 agent 连接数（默认 10）
-#   OW_AGENT_RATE=60                    # 每个 agent 每分钟最大工具调用次数（默认 60）
+#   OW_AGENT_MAX=8                      # 最大并发 agent 连接数（默认 8）
+#   OW_AGENT_RATE=30                    # 每个 agent 每秒最大工具调用次数（默认 30）
 
 tunnel: <TUNNEL_ID>                                  # `cloudflared tunnel create ourworlds` 后得到
 credentials-file: /Users/<你>/.cloudflared/<TUNNEL_ID>.json
