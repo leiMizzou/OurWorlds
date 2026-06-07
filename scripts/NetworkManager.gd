@@ -28,6 +28,7 @@ var _seed: int = 1337
 var _spawn: Vector3 = Vector3.ZERO
 var _peers := {}                   # peer_id:int -> {eid, name, pos:Vector3, yaw:float, edits:Array[float]}
 var _eid_counter := 0
+var _vpeer_counter := 0            # 虚拟 peer 计数器（负 id 占位）
 var _self_eid := ""                # 本端自己的 eid（CLIENT/HOST）；快照里跳过它
 var _avatars := {}                 # eid -> RemoteAvatar 节点（CLIENT）
 var report_node: Node3D = null     # 客户端上报哪个节点的位置：默认玩家；agent-client 设成 agent 小人，
@@ -416,6 +417,52 @@ func _process(delta: float) -> void:
 			var rn: Node3D = report_node if report_node != null else player
 			if rn != null:
 				_rpc_update_self.rpc_id(1, rn.global_position.x, rn.global_position.y, rn.global_position.z, rn.rotation.y)
+
+# ============ 虚拟 Peer（Agent Gateway 用）============
+# 虚拟 peer 复用 _peers，用负整数 id 作键（agent-N eid）。
+# 负 id 确保 Godot 的 RPC 广播路径不会向它们发包（Godot MultiplayerPeer 只有正 id 的真实连接）。
+# authorize_edit / _accept_rate / build_player_snapshot 等核心方法对正负 id 均透明。
+
+func register_virtual_peer(display_name: String) -> String:
+	_vpeer_counter += 1
+	var pid := -_vpeer_counter
+	var eid := "agent-%d" % _vpeer_counter
+	var nm := display_name.strip_edges()
+	if nm == "": nm = eid
+	_peers[pid] = {"eid": eid, "name": nm, "pos": _scatter_spawn(_vpeer_counter), "yaw": 0.0, "edits": []}
+	if chat_hub != null:
+		chat_hub.register(eid, nm, "agent")
+	return eid
+
+func _vpid_for(eid: String) -> int:
+	for pid in _peers:
+		if pid < 0 and str(_peers[pid]["eid"]) == eid: return pid
+	return 0
+
+func update_virtual_peer(eid: String, pos: Vector3, yaw: float) -> void:
+	var pid := _vpid_for(eid)
+	if pid != 0: set_peer_transform(pid, pos, yaw)
+
+func virtual_say(eid: String, text: String, to: String = "") -> void:
+	if chat_hub == null: return
+	if to == "": chat_hub.post(eid, "", text)
+	else: chat_hub.post(eid, chat_hub.resolve(to), text)
+
+func remove_virtual_peer(eid: String) -> void:
+	var pid := _vpid_for(eid)
+	if pid != 0: drop_peer(pid)
+
+func apply_virtual_edit(eid: String, wx: int, wy: int, wz: int, id: int) -> bool:
+	return apply_virtual_edit_at(eid, wx, wy, wz, id, -1.0)
+
+func apply_virtual_edit_at(eid: String, wx: int, wy: int, wz: int, id: int, now: float) -> bool:
+	var pid := _vpid_for(eid)
+	if pid == 0: return false
+	var r := authorize_edit(pid, wx, wy, wz, id, now)
+	if not bool(r.get("ok", false)): return false
+	if mode == Mode.SERVER and multiplayer != null and multiplayer.has_multiplayer_peer():
+		_rpc_apply_edit.rpc(wx, wy, wz, id)
+	return true
 
 func _exit_tree() -> void:
 	# 服务器优雅退出时存一次盘（定期自动存盘兜底强杀丢的 ≤30s）
