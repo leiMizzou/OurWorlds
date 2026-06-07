@@ -366,9 +366,13 @@ async function forward(tool: string, args: Record<string, unknown>): Promise<Too
 // pass structured args through.
 // ---------------------------------------------------------------------------
 
+// NOTE: a plain int array (NOT z.tuple). Tuple schemas compile to JSON-Schema
+// `items: [<schema>,<schema>,<schema>]`, which OpenAI strict function-calling
+// rejects ("not of type object"). A homogeneous array → `items: {type:integer}`,
+// which every runtime accepts. The game validates the [x,y,z] length itself.
 const cell = z
-  .tuple([z.number().int(), z.number().int(), z.number().int()])
-  .describe("Integer voxel cell [x, y, z].");
+  .array(z.number().int())
+  .describe("Integer voxel cell as [x, y, z] (exactly 3 ints).");
 
 // 4.1 observe
 server.registerTool(
