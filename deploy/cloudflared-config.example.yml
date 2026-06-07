@@ -1,12 +1,19 @@
 # OurWorlds — Cloudflare Tunnel 配置模板（M3 公网部署）
 # 把它复制成 ~/.cloudflared/config.yml（或用 --config 指向它），填好 <占位符> 后再 `cloudflared tunnel run`。
 #
-# 思路：一条隧道，两个二级域名入口——
+# 思路：一条隧道，三条入口规则——
 #   1) 网页客户端（静态 WASM 站点，serve_web.py 在 :8060，带 COOP/COEP 头给多线程用）
 #   2) 游戏 WebSocket 权威服务器（Godot headless 在 :8971；Cloudflare 自动代理 WebSocket 升级 + 边缘 TLS）
+#   3) Agent Gateway（AgentGateway 在 :8972；path 路由 /agent → ws 升级；外部代理写 wss://play.…/agent）
 # 玩家拿到的入口链接形如：
 #   https://ourworlds.<你的域名>/?connect=wss://play.ourworlds.<你的域名>
 # （?connect= 由 Main._connect_url() 解析，网页端据此自动连服，无需在画布里点菜单。）
+#
+# Agent Gateway 服务端环境变量（在启动脚本 / deploy/run-public.sh 里设置，不要写进本文件）：
+#   OW_AGENT_GATEWAY_PORT=8972          # AgentGateway 监听端口（默认 8972）
+#   OW_AGENT_TOKENS=token1,token2       # 逗号分隔的有效连接令牌（PLACEHOLDER，勿提交真实值）
+#   OW_AGENT_MAX=10                     # 最大并发 agent 连接数（默认 10）
+#   OW_AGENT_RATE=60                    # 每个 agent 每分钟最大工具调用次数（默认 60）
 
 tunnel: <TUNNEL_ID>                                  # `cloudflared tunnel create ourworlds` 后得到
 credentials-file: /Users/<你>/.cloudflared/<TUNNEL_ID>.json
@@ -20,6 +27,13 @@ ingress:
   # —— 网页客户端（https，Cloudflare 边缘自动签证书）——
   - hostname: ourworlds.<你的域名>
     service: http://localhost:8060
+
+  # —— Agent Gateway（WebSocket；path=/agent → AgentGateway 在 :8972）——
+  #     外部连接地址：wss://play.ourworlds.<你的域名>/agent
+  #     客户端 env：OW_REMOTE_URL=wss://play.ourworlds.<你的域名>/agent
+  - hostname: play.ourworlds.<你的域名>
+    path: /agent
+    service: http://localhost:8972
 
   # —— 游戏权威服务器（WebSocket；Cloudflare 在 http(s) 服务上透明支持 WS 升级 → 客户端用 wss://）——
   - hostname: play.ourworlds.<你的域名>

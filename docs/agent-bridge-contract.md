@@ -27,6 +27,79 @@ and goals, and the game does the voxel work.
 The MCP bridge is the only client; there is no browser, so no WebSocket handshake and no
 CORS. Keep it a dumb byte stream.
 
+---
+
+## 1R. Remote Transport (Agent Gateway)
+
+The dedicated server (`AgentGateway`) exposes a **WebSocket** endpoint that lets remote agent
+runtimes join the shared world without running Godot locally. This transport is additive: the
+existing TCP contract (§1) is unchanged.
+
+| Property | Value |
+| --- | --- |
+| Protocol | **WebSocket** (`ws://` local, `wss://` over Cloudflare Tunnel). |
+| Public endpoint | `wss://play.ourworlds.app/agent` |
+| Local endpoint (testing) | `ws://127.0.0.1:<OW_AGENT_GATEWAY_PORT>` (default `8972`) |
+| Framing | Same **NDJSON** envelope as TCP: one JSON object per WebSocket message, UTF-8. |
+| First frame | **Auth handshake** (see §1R.1). All subsequent frames are identical to the TCP tool envelopes. |
+| Concurrency | Up to `OW_AGENT_MAX` simultaneous connections (server-configurable, default 10). |
+| Rate limiting | `OW_AGENT_RATE` max calls per agent per minute (server-configurable). |
+
+### 1R.1 Auth handshake
+
+Immediately after the WebSocket connection opens, the client **must** send an auth frame as its
+first message (before any tool call):
+
+```json
+{"id": 0, "tool": "auth", "args": {"token": "<token>", "name": "<display>"}}
+```
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `token` | **yes** | Connection token issued by the server operator (`OW_AGENT_TOKENS`). |
+| `name` | no | Display name shown to other players. Defaults to `agent-N` if omitted. |
+
+**Responses:**
+
+```json
+{"id": 0, "ok": true, "result": {}}
+```
+Auth accepted — the connection is now a live agent entity. Proceed with normal tool calls.
+
+```json
+{"id": 0, "ok": false, "error": "unauthorized"}
+```
+Token invalid or not present. The server closes the connection immediately after this response.
+
+```json
+{"id": 0, "ok": false, "error": "server at capacity"}
+```
+`OW_AGENT_MAX` connections already active. The server closes the connection immediately.
+
+### 1R.2 Tool envelopes (identical to TCP)
+
+After a successful auth, all tool calls and responses use the **exact same envelope shapes** as
+the TCP path (§1.1 / §1.2). The agent calls tools by name (`observe`, `goto`, `place`, etc.);
+the server echoes the `id` and returns `ok:true`/`ok:false`. There is no structural difference
+between TCP and WebSocket tool messages.
+
+### 1R.3 Server-agent fidelity note
+
+Agents connecting via the gateway run **server-side** (no Godot client / HUD). As a result,
+some fields in tool responses carry context defaults rather than live values:
+
+| Field | Behaviour for gateway agents |
+| --- | --- |
+| `observe.hotbar` | Returns the default hotbar block list (not player-driven). |
+| `observe.selected_block` | Returns a context default (e.g. `"grass"`). |
+| `observe.nearby_landmarks` | Returns an empty list (`[]`) — `DiscoveryTracker` is a client-side node and is not available to gateway agents. |
+
+All other fields (`pos`, `facing`, `region`, `time_of_day`, `heightmap`, `chat`, `inbox`,
+`recent_actions`) are fully live. World-editing tools (`place`, `break`, `build`, `goto`, etc.)
+operate identically to local agents and are broadcast to all connected players.
+
+---
+
 ### 1.1 Request envelope
 
 Every request is a single-line JSON object:
