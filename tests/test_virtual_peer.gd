@@ -24,6 +24,10 @@ func _initialize() -> void:
 	for raw in snap:
 		if str((raw as Dictionary)["eid"]) == ae: found = true
 	check(found, "virtual peer in snapshot")
+	var found_real := false
+	for raw in snap:
+		if str((raw as Dictionary)["eid"]) == pe: found_real = true
+	check(found_real, "real peer also in snapshot alongside virtual peer")
 
 	var ax := 20; var az := 20; var ay := data.surface_y(20, 20) + 1
 	var ok1 := nm.apply_virtual_edit(ae, ax, ay, az, BlockLibrary.STONE)

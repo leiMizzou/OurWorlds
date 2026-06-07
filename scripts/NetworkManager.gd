@@ -429,7 +429,7 @@ func register_virtual_peer(display_name: String) -> String:
 	var eid := "agent-%d" % _vpeer_counter
 	var nm := display_name.strip_edges()
 	if nm == "": nm = eid
-	_peers[pid] = {"eid": eid, "name": nm, "pos": _scatter_spawn(_vpeer_counter), "yaw": 0.0, "edits": []}
+	_peers[pid] = {"eid": eid, "name": nm, "pos": _scatter_spawn(_eid_counter + _vpeer_counter), "yaw": 0.0, "edits": []}
 	if chat_hub != null:
 		chat_hub.register(eid, nm, "agent")
 	return eid
@@ -444,7 +444,7 @@ func update_virtual_peer(eid: String, pos: Vector3, yaw: float) -> void:
 	if pid != 0: set_peer_transform(pid, pos, yaw)
 
 func virtual_say(eid: String, text: String, to: String = "") -> void:
-	if chat_hub == null: return
+	if chat_hub == null or _vpid_for(eid) == 0: return
 	if to == "": chat_hub.post(eid, "", text)
 	else: chat_hub.post(eid, chat_hub.resolve(to), text)
 
@@ -460,7 +460,7 @@ func apply_virtual_edit_at(eid: String, wx: int, wy: int, wz: int, id: int, now:
 	if pid == 0: return false
 	var r := authorize_edit(pid, wx, wy, wz, id, now)
 	if not bool(r.get("ok", false)): return false
-	if mode == Mode.SERVER and multiplayer != null and multiplayer.has_multiplayer_peer():
+	if is_server() and multiplayer != null and multiplayer.has_multiplayer_peer():
 		_rpc_apply_edit.rpc(wx, wy, wz, id)
 	return true
 
