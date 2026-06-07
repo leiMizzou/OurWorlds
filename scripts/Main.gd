@@ -796,7 +796,7 @@ func _on_logged_in(session: Dictionary) -> void:
 	_session = session
 	if hud != null and hud.has_method("show_feedback"):
 		var who := str(session.get("user_id", ""))
-		hud.show_feedback("account", "已登录" + (("：" + who.substr(0, 8)) if who != "" else ""))
+		hud.show_feedback("account", _t("TOAST_LOGGED_IN") + (("：" + who.substr(0, 8)) if who != "" else ""))
 	if nakama_client != null:
 		nakama_client.load_player_state()        # 登录后取回云端存档（跨设备续上）
 
@@ -812,7 +812,7 @@ func _on_player_state_loaded(state: Dictionary) -> void:
 		player.global_position = Vector3(float(sp[0]), float(sp[1]) + 1.0, float(sp[2]))
 		player.velocity = Vector3.ZERO
 		if hud != null and hud.has_method("show_feedback"):
-			hud.show_feedback("account", "已恢复云端存档")
+			hud.show_feedback("account", _t("TOAST_CLOUD_RESTORED"))
 
 func _save_account_state() -> void:
 	# 登录态下把当前世界 + 位置写到云端（关游戏/退出时调）。游客不存。
@@ -836,14 +836,14 @@ func teleport_to_peer(eid: String) -> void:
 	var pos: Vector3 = net_manager.peer_position(eid)
 	if pos.x == INF:
 		if hud != null and hud.has_method("show_feedback"):
-			hud.show_feedback("teleport", "对方不在线")
+			hud.show_feedback("teleport", _t("TOAST_PEER_OFFLINE"))
 		return
 	world.prime(world.chunk_of(int(pos.x), int(pos.z)), 1)   # 同步生成落点区块，落地即可踩
 	player.global_position = pos + Vector3(0, 1.5, 0)         # 抬一点，落在对方旁边
 	player.velocity = Vector3.ZERO
 	set_chat_active(false)                                    # 关聊天面板，回到游戏
 	if hud != null and hud.has_method("show_feedback"):
-		hud.show_feedback("teleport", "已传送过去参观")
+		hud.show_feedback("teleport", _t("TOAST_TELEPORTED_VISIT"))
 
 func _return_to_title_from_pause() -> void:
 	if _title_active:
@@ -986,7 +986,7 @@ func set_photo_mode(active: bool) -> void:
 			_pending_photo_feedback_kind = ""
 			_pending_photo_feedback_label = ""
 		else:
-			hud.show_feedback("mode", "界面已显示")
+			hud.show_feedback("mode", _t("TOAST_UI_SHOWN"))
 
 func _update_photo_overlay() -> void:
 	if photo_overlay == null:
@@ -1398,11 +1398,11 @@ func _save_from_menu() -> void:
 		_sync_hud_save_state()
 		_refresh_pause_summary_if_visible()
 		if hud != null:
-			hud.show_feedback("save", "世界已保存")
+			hud.show_feedback("save", _t("TOAST_WORLD_SAVED"))
 	else:
 		_refresh_pause_summary_if_visible()
 		if hud != null:
-			hud.show_feedback("save", "未启用存档")
+			hud.show_feedback("save", _t("TOAST_SAVE_DISABLED"))
 
 func _refresh_pause_summary_if_visible() -> void:
 	if pause_menu == null or not pause_menu.visible or _title_settings_active:
@@ -1771,18 +1771,18 @@ func _sanitize_graphics_quality(value: String) -> String:
 func _graphics_quality_label(value: String) -> String:
 	match _sanitize_graphics_quality(value):
 		"performance":
-			return "性能"
+			return _t("SETTINGS_QUALITY_PERFORMANCE")
 		"cinematic":
-			return "精美"
+			return _t("SETTINGS_QUALITY_CINEMATIC")
 		_:
-			return "均衡"
+			return _t("SETTINGS_QUALITY_BALANCED")
 
 func _on_view_radius_changed(value: int) -> void:
 	if world != null:
 		world.set_view_radius(value)
 	_save_setting("view_radius", world.view_radius if world != null else value)
 	if hud != null:
-		hud.show_feedback("save", "视距 %d" % value)
+		hud.show_feedback("save", _t("TOAST_VIEW_DISTANCE") % value)
 
 func _on_volume_changed(value: float) -> void:
 	if audio_feedback != null:
@@ -1807,7 +1807,7 @@ func _on_graphics_quality_changed(value: String) -> void:
 	_apply_graphics_quality(value)
 	_save_setting("graphics_quality", _graphics_quality)
 	if hud != null:
-		hud.show_feedback("mode", "画质 " + _graphics_quality_label(_graphics_quality))
+		hud.show_feedback("mode", _t("TOAST_QUALITY") % _graphics_quality_label(_graphics_quality))
 
 func _on_weather_changed(kind: String, label: String) -> void:
 	if hud == null:

@@ -397,5 +397,15 @@
   "PALETTE_TOOLTIP_NATURE": { "zh": "植被装饰：树叶、野花、草丛、蘑菇、芦苇", "en": "Plant decor: leaves, wildflowers, tall grass, mushrooms, reeds" },
   "PALETTE_TOOLTIP_DECOR": { "zh": "装饰与光源：灯具、玻璃、晶体、鎏金", "en": "Decor and lighting: lamps, glass, crystals, gilding" },
   "PALETTE_TOOLTIP_ORES": { "zh": "矿物资源：煤、铁、铜、蓝晶", "en": "Mineral resources: coal, iron, copper, blue crystal" },
-  "PALETTE_TOOLTIP_DEFAULT": { "zh": "材料分类", "en": "Material category" }
+  "PALETTE_TOOLTIP_DEFAULT": { "zh": "材料分类", "en": "Material category" },
+
+  "TOAST_LOGGED_IN": { "zh": "已登录", "en": "Signed in" },
+  "TOAST_CLOUD_RESTORED": { "zh": "已恢复云端存档", "en": "Cloud save restored" },
+  "TOAST_PEER_OFFLINE": { "zh": "对方不在线", "en": "Player is offline" },
+  "TOAST_TELEPORTED_VISIT": { "zh": "已传送过去参观", "en": "Teleported to player" },
+  "TOAST_UI_SHOWN": { "zh": "界面已显示", "en": "HUD visible" },
+  "TOAST_WORLD_SAVED": { "zh": "世界已保存", "en": "World saved" },
+  "TOAST_SAVE_DISABLED": { "zh": "未启用存档", "en": "Save not enabled" },
+  "TOAST_VIEW_DISTANCE": { "zh": "视距 %d", "en": "View distance %d" },
+  "TOAST_QUALITY": { "zh": "画质 %s", "en": "Quality: %s" }
 }
