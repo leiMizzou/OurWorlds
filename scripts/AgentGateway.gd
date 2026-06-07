@@ -69,7 +69,7 @@ func handle_envelope(conn: int, env: Dictionary) -> Dictionary:
 	var args: Dictionary = raw_args if typeof(raw_args) == TYPE_DICTIONARY else {}
 
 	# 未知连接（已关闭或从未 new_conn）：当作未鉴权处理，给出明确错误而非崩溃。
-	if st.is_empty() and not _conns.has(conn):
+	if st.is_empty():
 		return {"id": id, "ok": false, "error": "unauthenticated: unknown connection"}
 
 	if not bool(st.get("authed", false)):
@@ -139,10 +139,10 @@ func start(port: int) -> bool:
 	_server = TCPServer.new()
 	return _server.listen(port, "127.0.0.1") == OK
 
-# 停止监听并断开所有套接字（不影响逻辑连接的 despawn —— close_conn 仍负责名额回收）。
+# 停止监听：先 despawn 所有逻辑连接（含虚拟 peer），再停服务器。
 func stop() -> void:
-	for cid in _sockets.keys():
-		(_sockets[cid] as WebSocketPeer).close()
+	for cid in _conns.keys().duplicate():
+		close_conn(cid)
 	_sockets.clear()
 	if _server != null:
 		_server.stop()
