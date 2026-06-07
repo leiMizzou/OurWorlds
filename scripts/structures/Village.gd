@@ -1,9 +1,10 @@
 extends RefCounted
 const Chunk = preload("res://scripts/Chunk.gd")
 const BL = preload("res://scripts/BlockLibrary.gd")
+# [offset_x, offset_z, width, depth, wall_height, roof_height]
 const HOUSES := [[-14,-10,7,6,4,3],[6,-12,6,5,4,2],[-12,8,6,6,4,3],[8,6,7,5,4,2],[0,-2,8,7,5,3]]
 
-static func stamp(chunk, anchor: Vector3i) -> void:
+static func stamp(chunk: Chunk, anchor: Vector3i) -> void:
 	var cwx: int = chunk.cx * Chunk.SX
 	var cwz: int = chunk.cz * Chunk.SZ
 	var wy: int = anchor.y
@@ -23,7 +24,7 @@ static func stamp(chunk, anchor: Vector3i) -> void:
 	for h in HOUSES:
 		_stamp_house(chunk, anchor, cwx, cwz, int(h[0]), int(h[1]), int(h[2]), int(h[3]), int(h[4]), int(h[5]))
 
-static func _stamp_house(chunk, anchor: Vector3i, cwx: int, cwz: int,
+static func _stamp_house(chunk: Chunk, anchor: Vector3i, cwx: int, cwz: int,
 		hx: int, hz: int, w: int, d: int, h: int, rh: int) -> void:
 	var base_x := anchor.x + hx
 	var base_z := anchor.z + hz

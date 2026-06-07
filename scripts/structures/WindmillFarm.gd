@@ -6,7 +6,7 @@ const TOWER_R := 2
 const BLADE_LEN := 6
 const CROP_R := 18
 
-static func stamp(chunk, anchor: Vector3i) -> void:
+static func stamp(chunk: Chunk, anchor: Vector3i) -> void:
 	var cwx: int = chunk.cx * Chunk.SX
 	var cwz: int = chunk.cz * Chunk.SZ
 	var sx: int = maxi(anchor.x - CROP_R, cwx)

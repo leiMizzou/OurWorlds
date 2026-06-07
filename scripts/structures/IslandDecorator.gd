@@ -8,7 +8,7 @@ const BL = preload("res://scripts/BlockLibrary.gd")
 const SCATTER_GRID := 6       # 每 6 格一个散布格
 const SCATTER_RANGE := 60     # 散布区半径（从 anchor 起）
 
-static func stamp(chunk, anchor: Vector3i, theme: int, world_seed: int) -> void:
+static func stamp(chunk: Chunk, anchor: Vector3i, theme: int, world_seed: int) -> void:
 	var cwx: int = chunk.cx * Chunk.SX
 	var cwz: int = chunk.cz * Chunk.SZ
 	# 扫描散布区中属于本 chunk 的列
@@ -40,7 +40,7 @@ static func stamp(chunk, anchor: Vector3i, theme: int, world_seed: int) -> void:
 				continue
 			_place_by_theme(chunk, lx, sy, lz, wx, wz, theme, h)
 
-static func _place_by_theme(chunk, lx: int, sy: int, lz: int, wx: int, wz: int, theme: int, h: int) -> void:
+static func _place_by_theme(chunk: Chunk, lx: int, sy: int, lz: int, wx: int, wz: int, theme: int, h: int) -> void:
 	var kind: int = (h >> 8) % 100
 	match theme:
 		0:  # SNOW
@@ -78,12 +78,12 @@ static func _place_by_theme(chunk, lx: int, sy: int, lz: int, wx: int, wz: int, 
 
 # ---- 装饰物构建器 ----
 
-static func _place_block(chunk, lx: int, y: int, lz: int, bid: int) -> void:
+static func _place_block(chunk: Chunk, lx: int, y: int, lz: int, bid: int) -> void:
 	if y >= 0 and y < Chunk.SY and lx >= 0 and lx < Chunk.SX and lz >= 0 and lz < Chunk.SZ:
 		if chunk.get_block(lx, y, lz) == 0:
 			chunk.set_block(lx, y, lz, bid)
 
-static func _place_pine_tree(chunk, lx: int, base_y: int, lz: int, h: int) -> void:
+static func _place_pine_tree(chunk: Chunk, lx: int, base_y: int, lz: int, h: int) -> void:
 	var trunk_h: int = 4 + (h >> 12) % 3   # 4-6 tall
 	for dy in range(trunk_h):
 		var y: int = base_y + dy
@@ -107,7 +107,7 @@ static func _place_pine_tree(chunk, lx: int, base_y: int, lz: int, h: int) -> vo
 	if tip_y >= 0 and tip_y < Chunk.SY:
 		chunk.set_block(lx, tip_y, lz, BL.PINE_LEAVES)
 
-static func _place_palm_tree(chunk, lx: int, base_y: int, lz: int, h: int) -> void:
+static func _place_palm_tree(chunk: Chunk, lx: int, base_y: int, lz: int, h: int) -> void:
 	var trunk_h: int = 5 + (h >> 12) % 3   # 5-7 tall
 	for dy in range(trunk_h):
 		var y: int = base_y + dy
@@ -126,7 +126,7 @@ static func _place_palm_tree(chunk, lx: int, base_y: int, lz: int, h: int) -> vo
 				if chunk.get_block(nx, ny, nz) == 0:
 					chunk.set_block(nx, ny, nz, BL.LEAVES)
 
-static func _place_cactus(chunk, lx: int, base_y: int, lz: int, h: int) -> void:
+static func _place_cactus(chunk: Chunk, lx: int, base_y: int, lz: int, h: int) -> void:
 	var cactus_h: int = 3 + (h >> 14) % 3   # 3-5 tall
 	for dy in range(cactus_h):
 		var y: int = base_y + dy
@@ -141,13 +141,13 @@ static func _place_cactus(chunk, lx: int, base_y: int, lz: int, h: int) -> void:
 			if arm_y + 1 < Chunk.SY:
 				chunk.set_block(arm_x, arm_y + 1, lz, BL.TALL_GRASS)
 
-static func _place_rock_cluster(chunk, lx: int, base_y: int, lz: int, h: int) -> void:
+static func _place_rock_cluster(chunk: Chunk, lx: int, base_y: int, lz: int, h: int) -> void:
 	var rock_type: int = BL.BASALT if (h >> 10) % 2 == 0 else BL.STONE
 	_place_block(chunk, lx, base_y, lz, rock_type)
 	if (h >> 11) % 3 > 0:
 		_place_block(chunk, lx, base_y + 1, lz, rock_type)
 
-static func _place_lamp_post(chunk, lx: int, base_y: int, lz: int) -> void:
+static func _place_lamp_post(chunk: Chunk, lx: int, base_y: int, lz: int) -> void:
 	for dy in range(3):
 		var y: int = base_y + dy
 		if y >= 0 and y < Chunk.SY:
@@ -156,7 +156,7 @@ static func _place_lamp_post(chunk, lx: int, base_y: int, lz: int) -> void:
 	if top_y >= 0 and top_y < Chunk.SY:
 		chunk.set_block(lx, top_y, lz, BL.LANTERN)
 
-static func _place_neon_pillar(chunk, lx: int, base_y: int, lz: int, h: int) -> void:
+static func _place_neon_pillar(chunk: Chunk, lx: int, base_y: int, lz: int, h: int) -> void:
 	var neon_colors := [BL.NEON_CYAN, BL.NEON_MAGENTA, BL.NEON_LIME]
 	var neon_id: int = neon_colors[(h >> 10) % 3]
 	var pillar_h: int = 2 + (h >> 13) % 4   # 2-5 tall
@@ -165,7 +165,7 @@ static func _place_neon_pillar(chunk, lx: int, base_y: int, lz: int, h: int) -> 
 		if y >= 0 and y < Chunk.SY:
 			chunk.set_block(lx, y, lz, neon_id)
 
-static func _place_crop_patch(chunk, lx: int, sy: int, lz: int, h: int) -> void:
+static func _place_crop_patch(chunk: Chunk, lx: int, sy: int, lz: int, h: int) -> void:
 	# 在地面上种一小片庄稼：先放 WATER 灌溉沟再放 TALL_GRASS/REEDS
 	if (h >> 9) % 3 == 0:
 		# 灌溉沟
@@ -175,7 +175,7 @@ static func _place_crop_patch(chunk, lx: int, sy: int, lz: int, h: int) -> void:
 		var crop: int = BL.TALL_GRASS if (h >> 11) % 2 == 0 else BL.REEDS
 		_place_block(chunk, lx, sy + 1, lz, crop)
 
-static func _place_dock_post(chunk, lx: int, sy: int, lz: int) -> void:
+static func _place_dock_post(chunk: Chunk, lx: int, sy: int, lz: int) -> void:
 	# LOG 柱子从水底/地面向上伸出
 	for dy in range(4):
 		var y: int = sy - 1 + dy

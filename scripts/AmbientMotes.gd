@@ -132,7 +132,7 @@ func _region_tint(label: String) -> Color:
 		return Color(0.86, 1.0, 0.58)
 	# ---- 主题岛扇区 ----
 	if label == "沙漠":
-		return Color(1.0, 0.82, 0.36)           # warm gold sand dust
+		return Color(1.0, 0.68, 0.22)           # amber sand dust（与默认 0.86/0.44 拉开距离）
 	if label == "热带海岸":
 		return Color(0.38, 0.96, 0.72)           # tropical turquoise
 	if label == "村庄":

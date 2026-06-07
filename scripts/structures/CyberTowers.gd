@@ -1,13 +1,14 @@
 extends RefCounted
 const Chunk = preload("res://scripts/Chunk.gd")
 const BL = preload("res://scripts/BlockLibrary.gd")
+# [offset_x, offset_z, half_width, height, neon_block_id]
 const TOWERS := [
-	[0, 0, 3, 28, BL.NEON_CYAN],
-	[-8, -6, 2, 20, BL.NEON_MAGENTA],
-	[7, 5, 2, 22, BL.NEON_LIME],
+	[0, 0, 3, 28, BL.NEON_CYAN],       # 中央主塔
+	[-8, -6, 2, 20, BL.NEON_MAGENTA],   # 西北副塔
+	[7, 5, 2, 22, BL.NEON_LIME],        # 东南副塔
 ]
 
-static func stamp(chunk, anchor: Vector3i) -> void:
+static func stamp(chunk: Chunk, anchor: Vector3i) -> void:
 	var cwx: int = chunk.cx * Chunk.SX
 	var cwz: int = chunk.cz * Chunk.SZ
 	for t in TOWERS:

@@ -109,12 +109,13 @@ func surface_height(wx: int, wz: int) -> int:
 	return maxi(h, FLOOR_Y + 1)
 
 # 扇区中心世界坐标（确定性，按 cell 0..8 算出）
+# 使用与 sector_cell() 相同的浮点 span 以保持一致性。
 func sector_anchor(cell: int) -> Vector3i:
 	var col := cell % SECTORS
 	var row := cell / SECTORS
-	var span := ISLAND_SIZE / SECTORS
-	var cx := -HALF + span / 2 + col * span
-	var cz := -HALF + span / 2 + row * span
+	var span := float(ISLAND_SIZE) / float(SECTORS)
+	var cx := int(round(float(-HALF) + span * 0.5 + float(col) * span))
+	var cz := int(round(float(-HALF) + span * 0.5 + float(row) * span))
 	var sy := surface_height(cx, cz)
 	return Vector3i(cx, sy, cz)
 

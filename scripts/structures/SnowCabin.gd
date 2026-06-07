@@ -5,8 +5,10 @@ const W := 8
 const D := 6
 const H := 4
 const ROOF_H := 3
+# [offset_x, offset_z, trunk_height] — 小屋周围的松树
+const PINE_TREES := [[-8, -4, 5], [7, 3, 6], [-6, 7, 4]]
 
-static func stamp(chunk, anchor: Vector3i) -> void:
+static func stamp(chunk: Chunk, anchor: Vector3i) -> void:
 	var cwx: int = chunk.cx * Chunk.SX
 	var cwz: int = chunk.cz * Chunk.SZ
 	var bx := anchor.x - W / 2
@@ -51,7 +53,9 @@ static func stamp(chunk, anchor: Vector3i) -> void:
 	var llz: int = anchor.z - cwz
 	if llx >= 0 and llx < Chunk.SX and llz >= 0 and llz < Chunk.SZ and by + 1 >= 0 and by + 1 < Chunk.SY:
 		chunk.set_block(llx, by + 1, llz, BL.LANTERN)
-	var trees := [[anchor.x - 8, anchor.z - 4, 5], [anchor.x + 7, anchor.z + 3, 6], [anchor.x - 6, anchor.z + 7, 4]]
+	var trees := []
+	for pt in PINE_TREES:
+		trees.append([anchor.x + int(pt[0]), anchor.z + int(pt[1]), int(pt[2])])
 	for t in trees:
 		var twx: int = int(t[0])
 		var twz: int = int(t[1])

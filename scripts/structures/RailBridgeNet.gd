@@ -2,17 +2,21 @@ extends RefCounted
 const Chunk = preload("res://scripts/Chunk.gd")
 const BL = preload("res://scripts/BlockLibrary.gd")
 const HALF := 256
+const ISLAND_SIZE := 512
 const SECTORS := 3
-const SPAN := 512 / SECTORS   # = 170，与 IslandGenerator 一致
 
+# 与 IslandGenerator.sector_anchor 使用相同的浮点 span 计算，确保坐标一致。
 static func _sector_center(cell: int) -> Vector2i:
-	var col := cell % 3
-	var row := cell / 3
-	return Vector2i(-HALF + SPAN / 2 + col * SPAN, -HALF + SPAN / 2 + row * SPAN)
+	var col := cell % SECTORS
+	var row := cell / SECTORS
+	var span := float(ISLAND_SIZE) / float(SECTORS)
+	var cx := int(round(float(-HALF) + span * 0.5 + float(col) * span))
+	var cz := int(round(float(-HALF) + span * 0.5 + float(row) * span))
+	return Vector2i(cx, cz)
 
 const LINKS := [[0,1],[1,2],[3,4],[4,5],[6,7],[7,8],[0,3],[3,6],[1,4],[4,7],[2,5],[5,8]]
 
-static func stamp(chunk, anchor: Vector3i) -> void:
+static func stamp(chunk: Chunk, anchor: Vector3i) -> void:
 	var cwx: int = chunk.cx * Chunk.SX
 	var cwz: int = chunk.cz * Chunk.SZ
 	for link in LINKS:

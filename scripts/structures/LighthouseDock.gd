@@ -5,7 +5,7 @@ const TOWER_R := 3
 const TOWER_H := 18
 const DOCK_LEN := 16
 
-static func stamp(chunk, anchor: Vector3i) -> void:
+static func stamp(chunk: Chunk, anchor: Vector3i) -> void:
 	var cwx: int = chunk.cx * Chunk.SX
 	var cwz: int = chunk.cz * Chunk.SZ
 	var sx: int = maxi(anchor.x - TOWER_R, cwx)
