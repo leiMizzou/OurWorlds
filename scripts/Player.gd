@@ -798,8 +798,25 @@ func _placement_cells() -> Array:
 
 # 模板格/方块的唯一几何来源：委托给 node-free 的 BuildTemplates。
 # 简单模板用当前选中方块（current_block）填充；装饰模板自带方块 id。非模板返回 []。
+# 例外：交互式 platform 用 _brush_axes(_target_normal) 计算 5×5 footprint，
+# 这样对着竖直墙面瞄准时平台会贴合墙面（保留重构前的手感）。地面(法线=UP)与
+# BuildTemplates 朝向0 等价。Agent/headless 的 apply_build_template 仍直接用
+# BuildTemplates.edits_for（服务端没有法线），保持几何来源单一。
 func _template_edits() -> Array:
+	if build_template_id() == "platform":
+		return _interactive_platform_edits()
 	return BuildTemplates.edits_for(build_template_id(), _place, template_orientation_index, current_block())
+
+func _interactive_platform_edits() -> Array:
+	var axes := _brush_axes(_target_normal)
+	var axis_a: Vector3i = axes[0]
+	var axis_b: Vector3i = axes[1]
+	var block_id := current_block()
+	var edits := []
+	for b in range(-2, 3):
+		for a in range(-2, 3):
+			edits.append({"pos": _place + axis_a * a + axis_b * b, "id": block_id})
+	return edits
 
 func _placement_edits() -> Array:
 	var template_edits := _template_edits()
