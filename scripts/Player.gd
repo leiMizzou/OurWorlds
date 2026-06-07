@@ -730,11 +730,10 @@ func build_template_orientation_label() -> String:
 	return "东西" if template_orientation_index == 0 else "南北"
 
 # ---------- 外部代理 / 脚本入口：按模板 id 在指定锚点一键放置 ----------
-# 复用游戏内建造模板系统：临时设好模板上下文(_place/朝向/索引)，用 _placement_edits()
-# 算出与游戏内放置完全一致的方块清单，再走 World.request_block_edits 提交（单次撤销 + 每块单次重建），
-# 最后无条件还原所有被临时改动的状态，保证不影响真人游玩。
-# template_id：BUILD_TEMPLATES 里的 id（如 "campfire"）；"off" 非法。
-# orientation：0=东西，1=南北。返回实际改动的方块数；模板未知返回 -1。
+# 纯几何由 BuildTemplates.edits_for 计算（不依赖 Player 上下文）；
+# 结果直接提交到 world.request_block_edits。
+# template_id：BUILD_TEMPLATES 里的 id（如 "campfire"）；"off"/未知返回 -1。
+# orientation：0=东西，1=南北。返回实际改动的方块数。
 func apply_build_template(template_id: String, origin: Vector3i, orientation: int = 0) -> int:
 	if world == null:
 		return -1
@@ -870,12 +869,7 @@ func _cell_edits(cells: Array, block_id: int) -> Array:
 	return edits
 
 func _template_uses_fixed_blocks() -> bool:
-	return build_template_id() == "campfire" \
-		or build_template_id() == "bridge" \
-		or build_template_id() == "garden" \
-		or build_template_id() == "cabin" \
-		or build_template_id() == "beacon_tower" \
-		or build_template_id() == "signpost"
+	return build_template_id() in BuildTemplates.DECORATED
 
 func _break_cells() -> Array:
 	var radius := brush_radius()

@@ -28,6 +28,12 @@ func _initialize() -> void:
 	# Unknown template -> empty.
 	check(BuildTemplates.edits_for("nope", Vector3i.ZERO, 0, BlockLibrary.STONE).is_empty(), "unknown template -> []")
 
+	# orientation=1 (south-north) axis swap on a simple template
+	var arch1: Array = BuildTemplates.edits_for("arch", Vector3i(0, 0, 0), 1, BlockLibrary.STONE)
+	check(arch1.size() == 13, "arch orientation=1 cell count == 13")
+	# pillar is a simple 5-cell column
+	check(BuildTemplates.edits_for("pillar", Vector3i.ZERO, 0, BlockLibrary.STONE).size() == 5, "pillar == 5 cells")
+
 	if failed == 0: print("✅ ALL BUILD TEMPLATES CORE TESTS PASSED")
 	else: printerr("❌ ", failed, " build-template-core failures")
 	quit(0 if failed == 0 else 1)
