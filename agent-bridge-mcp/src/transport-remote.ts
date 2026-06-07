@@ -54,6 +54,8 @@ interface Pending {
 export interface RemoteClient {
   /** Send one tool call and await its correlated response. */
   call(tool: string, args: Record<string, unknown>): Promise<RemoteEnvelope>;
+  /** Close the underlying WebSocket and cancel pending timeouts. */
+  close(): void;
 }
 
 class RemoteClientImpl implements RemoteClient {
@@ -256,6 +258,19 @@ class RemoteClientImpl implements RemoteClient {
         }
       });
     });
+  }
+
+  /** Terminate the WebSocket connection and reject any pending calls. */
+  close(): void {
+    const ws = this.ws;
+    this.ws = null;
+    this.connecting = null;
+    for (const [, p] of this.pending) {
+      clearTimeout(p.timer);
+      p.reject(new Error("RemoteClient closed"));
+    }
+    this.pending.clear();
+    if (ws) ws.terminate();
   }
 }
 

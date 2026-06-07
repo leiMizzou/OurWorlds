@@ -22,5 +22,7 @@ test("remote transport: sends auth frame first, relays envelopes", async () => {
   assert.equal(frames[0].tool, "auth");           // auth first
   assert.equal(frames[0].args.token, "tok");
   assert.equal(frames[1].tool, "observe");
-  wss.close();
+  client.close();
+  for (const c of wss.clients) c.terminate();
+  await new Promise((res) => wss.close(res));
 });
