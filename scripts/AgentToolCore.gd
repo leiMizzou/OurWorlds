@@ -17,7 +17,7 @@ extends RefCounted
 #   ctx.say(text,to)->Dictionary {shown:bool,to:String}
 #   ctx.memory.get_goal()/set_goal(s)/notes()->Array/append_note(s)/save()
 #   ctx.resolve_block(name)->int(-1 未知)  ctx.alias_for(id)->String  ctx.hotbar_aliases()->Array
-#   ctx.time_info()->{fraction,phase,clock}  ctx.nearby_landmarks()->Array
+#   ctx.time_info()->{fraction,phase,clock}  # MUST return all three keys; no key may be absent
 #   ctx.landmarks_in_range(center:Vector3i,radius:float)->Array  ctx.chat_observe()->Dictionary
 #   ctx.record_action(tool,summary,ok)  ctx.recent_actions()->Array
 #   ctx.prime(x,z)  ctx.note_build()
@@ -96,7 +96,6 @@ static func _tool_observe(args: Dictionary, ctx) -> Dictionary:
 	var pitch_deg := _body_pitch_deg(ctx)
 	var region := str(ctx.read.region_label(pos.x, pos.z))
 	var tod: Dictionary = ctx.time_info()
-	var frac := float(tod.get("fraction", 0.30))
 	var half := int(hsize / 2)
 	var origin_x := pos.x - half
 	var origin_z := pos.z - half
@@ -116,9 +115,9 @@ static func _tool_observe(args: Dictionary, ctx) -> Dictionary:
 		"region": region,
 		"region_en": _region_alias(region),
 		"time_of_day": {
-			"fraction": snappedf(frac, 0.01),
-			"phase": str(tod.get("phase", _time_phase(frac))),
-			"clock": str(tod.get("clock", _time_clock(frac))),
+			"fraction": snappedf(float(tod["fraction"]), 0.01),
+			"phase": str(tod["phase"]),
+			"clock": str(tod["clock"]),
 		},
 		"selected_block": ctx.alias_for(ctx.body.selected_block_id),
 		"hotbar": ctx.hotbar_aliases(),
@@ -317,7 +316,7 @@ static func _tool_capture_build(args: Dictionary, ctx) -> Dictionary:
 	if not ctx.world_ready():
 		return _err("world not ready")
 	if not ctx.has_method("capture_blueprint"):
-		return _err("world not ready")
+		return _err("capture_build not supported by this context")
 	var name := str(args.get("name", "")).strip_edges()
 	if name == "" or not name.is_valid_filename():
 		return _err("bad args: name (required, 须为合法文件名)")
@@ -337,7 +336,7 @@ static func _tool_paste_build(args: Dictionary, ctx) -> Dictionary:
 	if not ctx.world_ready():
 		return _err("world not ready")
 	if not ctx.has_method("paste_blueprint"):
-		return _err("world not ready")
+		return _err("paste_build not supported by this context")
 	var name := str(args.get("name", "")).strip_edges()
 	if name == "" or not name.is_valid_filename():
 		return _err("bad args: name (required)")
@@ -427,25 +426,6 @@ static func _cardinal_from_yaw(yaw_deg: float) -> String:
 	var labels := ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 	var idx := int(round(yaw_deg / 45.0)) % 8
 	return labels[idx]
-
-static func _time_phase(frac: float) -> String:
-	if frac < 0.20 or frac >= 0.85:
-		return "night"
-	if frac < 0.28:
-		return "dawn"
-	if frac < 0.42:
-		return "morning"
-	if frac < 0.58:
-		return "noon"
-	if frac < 0.75:
-		return "afternoon"
-	return "dusk"
-
-static func _time_clock(frac: float) -> String:
-	var total := fmod(frac * 24.0, 24.0)
-	var h := int(total)
-	var m := int((total - float(h)) * 60.0)
-	return "%02d:%02d" % [h, m]
 
 static func _region_alias(label: String) -> String:
 	return str(REGION_ALIASES.get(label, label))

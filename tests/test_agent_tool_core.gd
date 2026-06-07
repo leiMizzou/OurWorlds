@@ -70,6 +70,8 @@ class FakeMemory extends RefCounted:
 		return _notes
 	func append_note(s: String) -> void:
 		_notes.append(s)
+	func updated_at() -> int:
+		return 0
 	func save() -> void:
 		saved = true
 
@@ -183,6 +185,51 @@ func _initialize() -> void:
 	# unknown tool 被拒
 	var unk := AgentToolCore.handle("fooberry", {}, ctx)
 	check(not bool(unk.get("ok", true)) and str(unk.get("error", "")).contains("unknown tool"), "未知 tool 被拒")
+
+	# set_goal: echoes goal text
+	var sg := AgentToolCore.handle("set_goal", {"text": "build a tower"}, ctx)
+	check(bool(sg.get("ok", false)), "set_goal ok")
+	check(str((sg.get("result", {}) as Dictionary).get("goal", "")) == "build a tower", "set_goal 回显 goal")
+
+	# remember: note_count increments
+	var rm := AgentToolCore.handle("remember", {"text": "first note"}, ctx)
+	check(bool(rm.get("ok", false)), "remember ok")
+	check(int((rm.get("result", {}) as Dictionary).get("note_count", 0)) == 1, "remember note_count == 1")
+
+	# get_memory: returns goal + notes
+	var gm := AgentToolCore.handle("get_memory", {}, ctx)
+	check(bool(gm.get("ok", false)), "get_memory ok")
+	var gm_r: Dictionary = gm.get("result", {})
+	check(str(gm_r.get("goal", "")) == "build a tower", "get_memory 含 goal")
+	check((gm_r.get("notes", []) as Array).size() == 1, "get_memory notes.size == 1")
+
+	# scan: returns center and surface_y shape
+	var sc := AgentToolCore.handle("scan", {"radius": 4}, ctx)
+	check(bool(sc.get("ok", false)), "scan ok")
+	var sc_r: Dictionary = sc.get("result", {})
+	check(sc_r.has("center") and (sc_r["center"] as Array).size() == 2, "scan 含 center[2]")
+	check(sc_r.has("surface_y") and (sc_r["surface_y"] as Dictionary).has("min"), "scan 含 surface_y.min")
+
+	# break: clears a placed cell to air
+	var brk := AgentToolCore.handle("break", {"cells": [[px, py, pz]]}, ctx)
+	check(bool(brk.get("ok", false)), "break ok")
+	check(int((brk.get("result", {}) as Dictionary).get("changed", 0)) == 1, "break changed 1")
+	check(int(data.get_block(px, py, pz)) == BlockLibrary.AIR, "break 清除了方块")
+
+	# get_block: returns block alias + solid flag
+	var gb := AgentToolCore.handle("get_block", {"x": px, "y": py, "z": pz}, ctx)
+	check(bool(gb.get("ok", false)), "get_block ok")
+	var gb_r: Dictionary = gb.get("result", {})
+	check(str(gb_r.get("block", "")) == "air", "get_block alias == air (after break)")
+	check(gb_r.has("solid"), "get_block 含 solid")
+
+	# look: sets and clamps yaw/pitch
+	var lk := AgentToolCore.handle("look", {"yaw_deg": 90.0, "pitch_deg": 45.0}, ctx)
+	check(bool(lk.get("ok", false)), "look ok")
+	var lk_r: Dictionary = lk.get("result", {})
+	var facing: Dictionary = lk_r.get("facing", {})
+	check(absf(float(facing.get("yaw_deg", -1.0)) - 90.0) < 1.0, "look yaw ~= 90")
+	check(float(facing.get("pitch_deg", 0.0)) <= 80.0, "look pitch clamp <= 80")
 
 	if failed == 0:
 		print("✅ ALL AGENT TOOL CORE TESTS PASSED")
