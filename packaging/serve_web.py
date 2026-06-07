@@ -27,7 +27,13 @@ if not os.path.isdir(WEB_DIR):
     print("未找到 build/web —— 先跑 `bash packaging/build_web.sh` 导出 Web 版。")
     sys.exit(1)
 
-with socketserver.TCPServer(("127.0.0.1", PORT), CrossOriginIsolatedHandler) as httpd:
+class _ReusableTCPServer(socketserver.TCPServer):
+    # 重启时旧监听套接字可能仍处于 TIME_WAIT，未设 SO_REUSEADDR 会导致 Errno 48 绑定失败、
+    # 服务在 launchd 下反复重启抢不到端口。设 allow_reuse_address 让重启即时重绑。
+    allow_reuse_address = True
+
+
+with _ReusableTCPServer(("127.0.0.1", PORT), CrossOriginIsolatedHandler) as httpd:
     print("OurWorlds Web: http://localhost:%d/  (COOP/COEP 已启用，支持多线程 WASM)" % PORT)
     print("  目录: %s" % WEB_DIR)
     print("  Ctrl+C 停止")
