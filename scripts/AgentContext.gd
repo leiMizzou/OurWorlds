@@ -11,6 +11,7 @@ extends RefCounted
 const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
 const Blueprint = preload("res://scripts/Blueprint.gd")
 const Chunk = preload("res://scripts/Chunk.gd")
+const AgentMemoryStore = preload("res://scripts/AgentMemoryStore.gd")
 
 const BLUEPRINT_DIR := "user://blueprints"
 const MAX_CELLS := 4096
@@ -252,3 +253,251 @@ class LiveMemory extends RefCounted:
 		return int(bridge._memory.get("updated_at", 0))
 	func save() -> void:
 		bridge._save_memory()
+
+
+# ============================================================================
+# ServerAgentContext —— 无头服务器适配器：背后只有 WorldData + NetworkManager 虚拟 peer，
+# 零场景树、零活节点。实现 AgentToolCore 用到的同一套 ctx 接口，让同一份工具逻辑跑在服务器侧。
+# AgentGateway 会 per-token 造一个：ServerAgentContext.new(nm, data, eid, token_hash)。
+#
+# 与 LiveAgentContext 的对应（行为对齐）：
+#   read   -> ServerReader（委托 WorldData + 一个 BlockLibrary 实例做 is_solid）
+#   body   -> ServerBody（读写虚拟 peer 的位置/朝向；yaw/pitch/选中块存在 ctx 上）
+#   memory -> AgentMemoryStore（按 token_hash 持久化到 user://agent_mem/<hash>.json）
+#   say    -> nm.virtual_say  apply_edits -> nm.apply_virtual_edit（走服务器权威校验/reach）
+#   landmarks/chat -> 服务器无 DiscoveryTracker；chat 走 nm.chat_hub（无则空）
+# ============================================================================
+class ServerAgentContext extends RefCounted:
+	# id -> 英文别名（契约 §3 固定表，复制自 AgentBridge.BLOCK_ALIASES —— 不修改桥/活上下文）。
+	const BLOCK_ALIASES := {
+		0: "air", 1: "grass", 2: "dirt", 3: "stone", 4: "cobblestone", 5: "log",
+		6: "planks", 7: "sand", 8: "glass", 9: "water", 10: "leaves", 11: "snow",
+		12: "coal_ore", 13: "iron_ore", 14: "brick", 15: "mossy_stone", 16: "basalt",
+		17: "marble", 18: "lantern", 19: "wildflower", 20: "tall_grass", 21: "pine_leaves",
+		22: "copper_ore", 23: "red_mushroom", 24: "reeds", 25: "blue_crystal", 26: "clay",
+		27: "moonstone_lamp", 28: "polished_iron", 29: "copper_panel", 30: "steel_block",
+		31: "gold_trim", 32: "red_sand", 33: "terracotta", 34: "sunstone",
+		35: "neon_cyan", 36: "neon_magenta", 37: "neon_lime", 38: "rail",
+	}
+	const RECENT_ACTIONS_CAP := 8        # 与 AgentBridge.RECENT_ACTIONS_CAP 一致
+
+	var nm                               # NetworkManager（持权威 WorldData + 虚拟 peer）
+	var data                             # WorldData（权威世界数据）
+	var eid: String                      # 本 agent 的虚拟 peer eid（agent-N）
+	var lib                              # BlockLibrary 实例（仅用其纯数值判定，如 is_solid）
+	var read                             # ServerReader
+	var body                             # ServerBody
+	var memory                           # AgentMemoryStore（按 token 持久化）
+
+	var _name_to_id := {}                # 小写英文别名 / 中文 -> id
+	var _id_to_alias := {}               # id -> 小写英文别名
+	var _recent := []                    # 动作环形缓冲（cap 8），shape 同活桥
+	var _display_name := ""              # identify 设定的显示名（best-effort 存这）
+	var _time_fraction := 0.5            # 服务器无昼夜系统：默认正午，确定性
+	var _chat_since := 0                 # chat_observe 增量游标（上次见过的最大 seq）
+
+	func _init(p_nm, p_data, p_eid: String, token_hash: String) -> void:
+		nm = p_nm
+		data = p_data
+		eid = p_eid
+		lib = BlockLibrary.new()
+		read = ServerReader.new(p_data, lib)
+		body = ServerBody.new(self)
+		memory = AgentMemoryStore.new(token_hash)
+		_build_block_tables()
+
+	func world_ready() -> bool:
+		return data != null
+
+	# 编辑走服务器权威：逐条 apply_virtual_edit（含 reach / 频率 / y 范围校验），返回被接受的条数。
+	func apply_edits(edits: Array) -> int:
+		var changed := 0
+		for raw in edits:
+			var e: Dictionary = raw
+			var pos: Vector3i = e["pos"]
+			if nm.apply_virtual_edit(eid, pos.x, pos.y, pos.z, int(e["id"])):
+				changed += 1
+		return changed
+
+	# 说话：经 nm.virtual_say 路由到 chat_hub（to 省略=大厅；否则私聊）。服务器无 HUD，shown 取决于有无 chat_hub。
+	func say(text: String, to: String) -> Dictionary:
+		var to_label := "lobby"
+		var shown := false
+		if nm.chat_hub != null:
+			nm.virtual_say(eid, text, to)
+			shown = true
+			if to != "":
+				to_label = to
+		return {"shown": shown, "to": to_label}
+
+	# 块名 <-> id：用契约固定表（+中文名）服务器侧解析，与活桥同源同语义。
+	func resolve_block(name: String) -> int:
+		var clean := name.strip_edges()
+		if clean == "":
+			return -1
+		var lower := clean.to_lower()
+		if _name_to_id.has(lower):
+			return int(_name_to_id[lower])
+		if _name_to_id.has(clean):
+			return int(_name_to_id[clean])
+		return -1
+
+	func alias_for(id: int) -> String:
+		return str(_id_to_alias.get(id, "air"))
+
+	# 服务器 agent 无热栏：返回 BlockLibrary 的默认热栏别名（非空字符串数组）。
+	func hotbar_aliases() -> Array:
+		var out := []
+		for raw in lib.hotbar_blocks():
+			out.append(alias_for(int(raw)))
+		return out
+
+	# 时间：服务器无昼夜系统，用可注入的 fraction（默认正午）算出 {fraction,phase,clock}（三键齐全）。
+	func time_info() -> Dictionary:
+		var frac: float = fposmod(_time_fraction, 1.0)
+		return {"fraction": frac, "phase": _phase_for(frac), "clock": _clock_for(frac)}
+
+	# 服务器无 DiscoveryTracker：地标恒空（observe/scan 仍保留这些键，只是空数组）。
+	func nearby_landmarks() -> Array:
+		return []
+
+	func landmarks_in_range(_center: Vector3i, _radius: float) -> Array:
+		return []
+
+	# observe 的聊天块：有 chat_hub 则返回 {chat, inbox}，否则空字典（observe 不带这两键）。
+	func chat_observe() -> Dictionary:
+		var hub = nm.chat_hub
+		if hub == null:
+			return {}
+		var since := int(_chat_since)
+		var unread: Dictionary = hub.unread_for(eid, since)
+		_chat_since = int(unread.get("last_seq", since))
+		return {"chat": hub.lobby_recent(LOBBY_CHAT_RECENT), "inbox": unread.get("messages", [])}
+
+	func record_action(tool: String, summary: String, ok: bool) -> void:
+		_recent.append({"tool": tool, "summary": summary, "ok": ok})
+		while _recent.size() > RECENT_ACTIONS_CAP:
+			_recent.pop_front()
+
+	func recent_actions() -> Array:
+		return _recent.duplicate(true)
+
+	# goto 的"同步生成落点"：服务器 WorldData 按需即时生成，无需预热 -> no-op。
+	func prime(_x: int, _z: int) -> void:
+		pass
+
+	# build 的"小人闪一下"：服务器无 avatar 节点 -> no-op。
+	func note_build() -> void:
+		pass
+
+	# set_goal 后同步在线状态：服务器侧 best-effort 写到 chat_hub 状态（无则 no-op）。
+	func set_goal_status(text: String) -> void:
+		if nm.chat_hub != null and nm.chat_hub.has_method("set_status"):
+			nm.chat_hub.set_status(eid, text)
+
+	# 报名：设当前虚拟 peer 显示名（best-effort）。有 chat_hub 就登记；名字也存在 ctx 上。回 {entity_id,name}。
+	func identify(name: String) -> Dictionary:
+		_display_name = name
+		if nm.chat_hub != null and name != "":
+			nm.chat_hub.register(eid, name, "agent")
+		return {"entity_id": eid, "name": name}
+
+	# 注：不实现 capture_blueprint / paste_blueprint —— AgentToolCore 的 has_method 守卫会回
+	# "not supported by this context"，v1 服务器侧可接受。
+
+	# ---- 内部：块名表 / 时间相位（与活桥同语义）----
+
+	func _build_block_tables() -> void:
+		for id in BLOCK_ALIASES.keys():
+			var alias := str(BLOCK_ALIASES[id])
+			_id_to_alias[int(id)] = alias
+			_name_to_id[alias] = int(id)
+		# 从 BlockLibrary 补中文名（creative + hotbar），仅对有定义的方块
+		var ids := {}
+		ids[BlockLibrary.AIR] = true
+		for raw in lib.creative_blocks():
+			ids[int(raw)] = true
+		for raw in lib.hotbar_blocks():
+			ids[int(raw)] = true
+		for id in ids.keys():
+			var cn := ""
+			if lib.has_def(int(id)):
+				cn = str(lib.block_name(int(id)))
+			elif int(id) == BlockLibrary.AIR:
+				cn = "空气"
+			if cn != "":
+				_name_to_id[cn] = int(id)
+
+	func _phase_for(frac: float) -> String:
+		if frac < 0.20 or frac >= 0.85:
+			return "night"
+		if frac < 0.28:
+			return "dawn"
+		if frac < 0.42:
+			return "morning"
+		if frac < 0.58:
+			return "noon"
+		if frac < 0.75:
+			return "afternoon"
+		return "dusk"
+
+	func _clock_for(frac: float) -> String:
+		var total := fmod(frac * 24.0, 24.0)
+		var h := int(total)
+		var m := int((total - float(h)) * 60.0)
+		return "%02d:%02d" % [h, m]
+
+
+# ---- ServerReader：ctx.read.* -> WorldData（+ BlockLibrary 实例做 is_solid）----
+class ServerReader extends RefCounted:
+	var data
+	var lib
+	func _init(p_data, p_lib) -> void:
+		data = p_data
+		lib = p_lib
+	func surface_y(x: int, z: int) -> int:
+		return int(data.surface_y(x, z))
+	func region_label(x: int, z: int) -> String:
+		return str(data.region_label(x, z))
+	func get_block(x: int, y: int, z: int) -> int:
+		return int(data.get_block(x, y, z))
+	func chunk_of(x: int, z: int) -> Vector2i:
+		return data.chunk_of(x, z)
+	func is_solid(id: int) -> bool:
+		return bool(lib.is_solid(id))
+
+
+# ---- ServerBody：ctx.body.* -> NetworkManager 虚拟 peer（位置写回 nm；yaw/pitch/选中块存 ctx）----
+class ServerBody extends RefCounted:
+	var ctx                              # ServerAgentContext（拿 nm/eid + 存 yaw/pitch/选中块）
+	var selected_block_id: int = BlockLibrary.STONE
+	var _yaw := 0.0
+	var _pitch := 0.0
+	func _init(p_ctx) -> void:
+		ctx = p_ctx
+
+	var eid: String:
+		get:
+			return str(ctx.eid)
+
+	# 当前格：从 nm 读虚拟 peer 位置（peer_position 找不到回 INF 哨兵；此处由调用方保证 peer 在线）。
+	func get_pos() -> Vector3:
+		return ctx.nm.peer_position(ctx.eid)
+
+	# 写位置：必须写回 nm —— 否则服务器权威按旧位置做 reach 校验会拒绝远处编辑（goto 后 place 的关键）。
+	func set_pos(p: Vector3) -> void:
+		ctx.nm.update_virtual_peer(ctx.eid, p, _yaw)
+
+	func get_yaw() -> float:
+		return _yaw
+
+	func set_yaw(y: float) -> void:
+		_yaw = y
+		# yaw 同步到 nm（位置不变），让快照里别人看到 agent 转向
+		ctx.nm.update_virtual_peer(ctx.eid, get_pos(), _yaw)
+
+	func get_pitch() -> float:
+		return _pitch
+
+	func set_pitch(p: float) -> void:
+		_pitch = p
