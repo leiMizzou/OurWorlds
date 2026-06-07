@@ -4,6 +4,7 @@ extends CharacterBody3D
 
 const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
 const Chunk = preload("res://scripts/Chunk.gd")
+const BuildTemplates = preload("res://scripts/BuildTemplates.gd")
 
 signal action_feedback(kind: String, label: String)
 signal world_feedback(kind: String, cell: Vector3i, block_id: int)
@@ -737,34 +738,13 @@ func build_template_orientation_label() -> String:
 func apply_build_template(template_id: String, origin: Vector3i, orientation: int = 0) -> int:
 	if world == null:
 		return -1
-	var target_index := _build_template_index_for(template_id)
-	if target_index < 0 or template_id == "off":
+	if template_id == "off" or _build_template_index_for(template_id) < 0:
 		return -1
-	# 快照需要临时改动的状态
-	var saved_template_index := template_index
-	var saved_orientation := template_orientation_index
-	var saved_place := _place
-	var saved_target := _target
-	var saved_normal := _target_normal
-	var saved_has_target := _has_target
-	var changed := 0
-	template_index = target_index
-	template_orientation_index = posmod(orientation, 2)
-	_place = origin
-	_target = origin - Vector3i.UP
-	_target_normal = Vector3i.UP
-	_has_target = true
-	var edits := _placement_edits()
+	# 纯几何来自 BuildTemplates（与游戏内放置同一来源）；不改动玩家的任何放置上下文。
+	var edits := BuildTemplates.edits_for(template_id, origin, posmod(orientation, 2), current_block())
 	if world.has_method("request_block_edits"):
-		changed = int(world.request_block_edits(edits))
-	# 还原
-	template_index = saved_template_index
-	template_orientation_index = saved_orientation
-	_place = saved_place
-	_target = saved_target
-	_target_normal = saved_normal
-	_has_target = saved_has_target
-	return changed
+		return int(world.request_block_edits(edits))
+	return 0
 
 func _build_template_index_for(template_id: String) -> int:
 	for i in range(BUILD_TEMPLATES.size()):
@@ -801,7 +781,7 @@ func _build_template_status_label() -> String:
 	return "模板 %s %s" % [build_template_label(), build_template_orientation_label()]
 
 func _placement_cells() -> Array:
-	var template_cells := _template_cells()
+	var template_cells := _edit_cells(_template_edits())
 	if not template_cells.is_empty():
 		return template_cells
 	var radius := brush_radius()
@@ -816,20 +796,15 @@ func _placement_cells() -> Array:
 			cells.append(_place + axis_a * a + axis_b * b)
 	return cells
 
+# 模板格/方块的唯一几何来源：委托给 node-free 的 BuildTemplates。
+# 简单模板用当前选中方块（current_block）填充；装饰模板自带方块 id。非模板返回 []。
+func _template_edits() -> Array:
+	return BuildTemplates.edits_for(build_template_id(), _place, template_orientation_index, current_block())
+
 func _placement_edits() -> Array:
-	match build_template_id():
-		"campfire":
-			return _campfire_template_edits()
-		"bridge":
-			return _bridge_template_edits()
-		"garden":
-			return _garden_template_edits()
-		"cabin":
-			return _cabin_template_edits()
-		"beacon_tower":
-			return _beacon_tower_template_edits()
-		"signpost":
-			return _signpost_template_edits()
+	var template_edits := _template_edits()
+	if not template_edits.is_empty():
+		return template_edits
 	var edits := []
 	var block_id := current_block()
 	for raw in _placement_cells():
@@ -1055,263 +1030,6 @@ func _brush_axes(normal: Vector3i) -> Array:
 	if abs(normal.x) > 0:
 		return [Vector3i(0, 1, 0), Vector3i(0, 0, 1)]
 	return [Vector3i.RIGHT, Vector3i(0, 1, 0)]
-
-func _template_cells() -> Array:
-	match build_template_id():
-		"platform":
-			return _platform_template_cells()
-		"pillar":
-			return _pillar_template_cells()
-		"arch":
-			return _arch_template_cells()
-		"wall":
-			return _wall_template_cells()
-		"stairs":
-			return _stairs_template_cells()
-		"room_frame":
-			return _room_frame_template_cells()
-		"cabin":
-			return _cabin_template_cells()
-		"campfire":
-			return _campfire_template_cells()
-		"bridge":
-			return _bridge_template_cells()
-		"garden":
-			return _garden_template_cells()
-		"beacon_tower":
-			return _beacon_tower_template_cells()
-		"signpost":
-			return _signpost_template_cells()
-		_:
-			return []
-
-func _platform_template_cells() -> Array:
-	var axes := _brush_axes(_target_normal)
-	var axis_a: Vector3i = axes[0]
-	var axis_b: Vector3i = axes[1]
-	var cells := []
-	for b in range(-2, 3):
-		for a in range(-2, 3):
-			cells.append(_place + axis_a * a + axis_b * b)
-	return cells
-
-func _pillar_template_cells() -> Array:
-	var cells := []
-	for y in range(0, 5):
-		cells.append(_place + Vector3i.UP * y)
-	return cells
-
-func _arch_template_cells() -> Array:
-	var right := _template_right_axis()
-	var up := Vector3i.UP
-	var cells := []
-	for y in range(0, 4):
-		cells.append(_place + right * -2 + up * y)
-		cells.append(_place + right * 2 + up * y)
-	for x in range(-2, 3):
-		cells.append(_place + right * x + up * 4)
-	return cells
-
-func _wall_template_cells() -> Array:
-	var right := _template_right_axis()
-	var up := Vector3i.UP
-	var cells := []
-	for y in range(0, 3):
-		for x in range(-2, 3):
-			cells.append(_place + right * x + up * y)
-	return cells
-
-func _stairs_template_cells() -> Array:
-	var right := _template_right_axis()
-	var forward := _template_depth_axis()
-	var up := Vector3i.UP
-	var cells := []
-	for step in range(0, 5):
-		for y in range(0, step + 1):
-			for x in range(-1, 2):
-				cells.append(_place + right * x + forward * step + up * y)
-	return cells
-
-func _room_frame_template_cells() -> Array:
-	var right := _template_right_axis()
-	var depth := _template_depth_axis()
-	var up := Vector3i.UP
-	var cells := []
-	for sx in [-3, 3]:
-		for sz in [-3, 3]:
-			for y in range(0, 4):
-				cells.append(_place + right * sx + depth * sz + up * y)
-	for x in range(-3, 4):
-		cells.append(_place + right * x + depth * -3 + up * 4)
-		cells.append(_place + right * x + depth * 3 + up * 4)
-	for z in range(-2, 3):
-		cells.append(_place + right * -3 + depth * z + up * 4)
-		cells.append(_place + right * 3 + depth * z + up * 4)
-	return cells
-
-func _cabin_template_cells() -> Array:
-	return _edit_cells(_cabin_template_edits())
-
-func _cabin_template_edits() -> Array:
-	var right := _template_right_axis()
-	var depth := _template_depth_axis()
-	var up := Vector3i.UP
-	var edits := []
-	var seen := {}
-	for z in range(-3, 4):
-		for x in range(-3, 4):
-			_add_template_edit(edits, seen, _place + right * x + depth * z, BlockLibrary.PLANKS)
-	for y in range(1, 4):
-		for z in range(-3, 4):
-			for x in range(-3, 4):
-				if abs(x) != 3 and abs(z) != 3:
-					continue
-				if z == -3 and x == 0 and y <= 2:
-					continue
-				var id := BlockLibrary.PLANKS
-				if abs(x) == 3 and abs(z) == 3:
-					id = BlockLibrary.LOG
-				elif y == 2 and ((abs(x) == 3 and z == 0) or (z == 3 and x == 0) or (z == -3 and abs(x) == 1)):
-					id = BlockLibrary.GLASS
-				_add_template_edit(edits, seen, _place + right * x + depth * z + up * y, id)
-	for z in range(-4, 5):
-		for x in range(-4, 5):
-			var ax := absi(x)
-			var y := 4
-			if ax <= 1:
-				y = 6
-			elif ax <= 3:
-				y = 5
-			_add_template_edit(edits, seen, _place + right * x + depth * z + up * y, BlockLibrary.BRICK)
-	for x in range(-1, 2):
-		_add_template_edit(edits, seen, _place + right * x + depth * -4, BlockLibrary.COBBLE)
-	_add_template_edit(edits, seen, _place + up * 3, BlockLibrary.LANTERN)
-	return edits
-
-func _add_template_edit(edits: Array, seen: Dictionary, pos: Vector3i, id: int) -> void:
-	var key := "%d,%d,%d" % [pos.x, pos.y, pos.z]
-	if seen.has(key):
-		return
-	seen[key] = true
-	edits.append({"pos": pos, "id": id})
-
-func _campfire_template_cells() -> Array:
-	return _edit_cells(_campfire_template_edits())
-
-func _campfire_template_edits() -> Array:
-	var right := _template_right_axis()
-	var depth := _template_depth_axis()
-	var up := Vector3i.UP
-	return [
-		{"pos": _place, "id": BlockLibrary.MOONSTONE_LAMP},
-		{"pos": _place + up, "id": BlockLibrary.LANTERN},
-		{"pos": _place + right, "id": BlockLibrary.LOG},
-		{"pos": _place - right, "id": BlockLibrary.LOG},
-		{"pos": _place + depth, "id": BlockLibrary.LOG},
-		{"pos": _place - depth, "id": BlockLibrary.LOG},
-		{"pos": _place + right + depth, "id": BlockLibrary.COBBLE},
-		{"pos": _place + right - depth, "id": BlockLibrary.COBBLE},
-		{"pos": _place - right + depth, "id": BlockLibrary.COBBLE},
-		{"pos": _place - right - depth, "id": BlockLibrary.COBBLE},
-	]
-
-func _bridge_template_cells() -> Array:
-	return _edit_cells(_bridge_template_edits())
-
-func _bridge_template_edits() -> Array:
-	var right := _template_right_axis()
-	var depth := _template_depth_axis()
-	var up := Vector3i.UP
-	var edits := []
-	for z in range(-3, 4):
-		for x in range(-1, 2):
-			edits.append({"pos": _place + right * x + depth * z, "id": BlockLibrary.PLANKS})
-		edits.append({"pos": _place + right * -2 + depth * z + up, "id": BlockLibrary.LOG})
-		edits.append({"pos": _place + right * 2 + depth * z + up, "id": BlockLibrary.LOG})
-	for sx in [-2, 2]:
-		for sz in [-3, 3]:
-			edits.append({"pos": _place + right * sx + depth * sz + up * 2, "id": BlockLibrary.LANTERN})
-	return edits
-
-func _garden_template_cells() -> Array:
-	return _edit_cells(_garden_template_edits())
-
-func _garden_template_edits() -> Array:
-	var right := _template_right_axis()
-	var depth := _template_depth_axis()
-	var up := Vector3i.UP
-	var edits := []
-	for z in range(-2, 3):
-		for x in range(-2, 3):
-			var id := BlockLibrary.CLAY if abs(x) == 2 or abs(z) == 2 else BlockLibrary.GRASS
-			edits.append({"pos": _place + right * x + depth * z, "id": id})
-	var plant_plan := [
-		{"x": 0, "z": 0, "id": BlockLibrary.RED_MUSHROOM},
-		{"x": -1, "z": 0, "id": BlockLibrary.WILDFLOWER},
-		{"x": 1, "z": 0, "id": BlockLibrary.WILDFLOWER},
-		{"x": 0, "z": -1, "id": BlockLibrary.WILDFLOWER},
-		{"x": 0, "z": 1, "id": BlockLibrary.WILDFLOWER},
-		{"x": -1, "z": -1, "id": BlockLibrary.TALL_GRASS},
-		{"x": 1, "z": -1, "id": BlockLibrary.TALL_GRASS},
-		{"x": -1, "z": 1, "id": BlockLibrary.TALL_GRASS},
-		{"x": 1, "z": 1, "id": BlockLibrary.TALL_GRASS},
-	]
-	for raw in plant_plan:
-		var item: Dictionary = raw
-		edits.append({"pos": _place + right * int(item["x"]) + depth * int(item["z"]) + up, "id": int(item["id"])})
-	return edits
-
-func _beacon_tower_template_cells() -> Array:
-	return _edit_cells(_beacon_tower_template_edits())
-
-func _beacon_tower_template_edits() -> Array:
-	var right := _template_right_axis()
-	var depth := _template_depth_axis()
-	var up := Vector3i.UP
-	var edits := []
-	for z in range(-2, 3):
-		for x in range(-2, 3):
-			var base_id := BlockLibrary.COBBLE if abs(x) == 2 or abs(z) == 2 else BlockLibrary.MOSSY_STONE
-			edits.append({"pos": _place + right * x + depth * z, "id": base_id})
-	for y in range(1, 5):
-		for sx in [-1, 1]:
-			for sz in [-1, 1]:
-				edits.append({"pos": _place + right * sx + depth * sz + up * y, "id": BlockLibrary.MARBLE})
-		for side in [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]:
-			var wall_id := BlockLibrary.GLASS if y == 2 or y == 3 else BlockLibrary.MARBLE
-			edits.append({"pos": _place + right * side.x + depth * side.y + up * y, "id": wall_id})
-	for z in range(-1, 2):
-		for x in range(-1, 2):
-			var deck_id := BlockLibrary.MOONSTONE_LAMP if x == 0 and z == 0 else BlockLibrary.GLASS
-			edits.append({"pos": _place + right * x + depth * z + up * 5, "id": deck_id})
-	edits.append({"pos": _place + up * 6, "id": BlockLibrary.LANTERN})
-	for side in [Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1), Vector2i(-1, 0), Vector2i(1, 0), Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 1)]:
-		edits.append({"pos": _place + right * side.x + depth * side.y + up * 6, "id": BlockLibrary.BRICK})
-	edits.append({"pos": _place + up * 7, "id": BlockLibrary.BRICK})
-	return edits
-
-func _signpost_template_cells() -> Array:
-	return _edit_cells(_signpost_template_edits())
-
-func _signpost_template_edits() -> Array:
-	var right := _template_right_axis()
-	var depth := _template_depth_axis()
-	var up := Vector3i.UP
-	return [
-		{"pos": _place, "id": BlockLibrary.MOSSY_STONE},
-		{"pos": _place + right, "id": BlockLibrary.COBBLE},
-		{"pos": _place - right, "id": BlockLibrary.COBBLE},
-		{"pos": _place + depth, "id": BlockLibrary.COBBLE},
-		{"pos": _place - depth, "id": BlockLibrary.COBBLE},
-		{"pos": _place + up, "id": BlockLibrary.LOG},
-		{"pos": _place + up * 2, "id": BlockLibrary.LOG},
-		{"pos": _place + up * 3, "id": BlockLibrary.LOG},
-		{"pos": _place + right * -1 + up * 3, "id": BlockLibrary.PLANKS},
-		{"pos": _place + right + up * 3, "id": BlockLibrary.PLANKS},
-		{"pos": _place + right * 2 + up * 3, "id": BlockLibrary.PLANKS},
-		{"pos": _place - depth + up * 2, "id": BlockLibrary.LANTERN},
-		{"pos": _place + up * 4, "id": BlockLibrary.MOONSTONE_LAMP},
-	]
 
 func _template_right_axis() -> Vector3i:
 	return Vector3i.RIGHT if template_orientation_index == 0 else Vector3i(0, 0, 1)
