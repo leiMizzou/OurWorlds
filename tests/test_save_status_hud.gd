@@ -3,6 +3,7 @@ extends SceneTree
 #   godot --headless --path <项目> --script res://tests/test_save_status_hud.gd
 
 const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
+const GameSettings = preload("res://scripts/GameSettings.gd")
 
 var _f := 0
 var _ready_f := -1
@@ -25,6 +26,8 @@ func _process(_delta: float) -> bool:
 		OS.set_environment("VC_SEED", "5151")
 		OS.set_environment("VC_SKIP_TITLE", "1")
 		OS.set_environment("VC_SETTINGS_PATH", "user://tests/save_status/settings.json")
+		# 预置 language=zh，使断言里的中文文案不受运行机 OS 语言影响（确定性回归）。
+		_seed_language("zh")
 		_clean_save()
 		_main = load("res://scenes/Main.tscn").instantiate()
 		root.add_child(_main)
@@ -78,3 +81,9 @@ func _clean_save() -> void:
 	DirAccess.make_dir_recursive_absolute(abs_dir)
 	if FileAccess.file_exists(_path):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(_path))
+
+# 写入仅含 language 的设置文件；Main 启动会据此把界面语言定为该语言。
+func _seed_language(lang: String) -> void:
+	var settings := GameSettings.load_settings()
+	settings["language"] = lang
+	GameSettings.save_settings(settings)

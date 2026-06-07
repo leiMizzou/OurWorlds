@@ -2,6 +2,9 @@ extends CanvasLayer
 # ChatPanel —— 游戏内大厅 / 私聊面板：左侧在线列表，右侧频道标题 + 消息流 + 输入框。
 # 数据来自 ChatHub（Main 注入）。Main 用 Enter 打开本面板；面板内 LineEdit Enter 发送。
 # 纯读 ChatHub，所以 presence_names()/rendered_log() 等可在 headless 下直接断言。
+#
+# i18n：经 _loc()（/root/Locale 节点路径）访问 Locale 单例，而不是裸标识符 `Locale` ——
+# 因为 GDScript 在 `godot --script` 编译被 preload 的脚本时不会注入 autoload 全局名。
 
 signal visit_requested(target_id: String)   # 在线列表点"前往" → Main 把玩家传送到该玩家旁
 
@@ -16,6 +19,23 @@ var _channel_label: Label
 var _log_label: RichTextLabel
 var _input: LineEdit
 var _open := false
+var _loc_cached: Node               # 缓存的 Locale 自动加载单例（经 /root/Locale 取，见 _loc()）
+
+# 经节点路径取 Locale 自动加载单例（不要用裸标识符 `Locale`）：见 TitleScreen/PauseMenu 同款注释。
+func _loc() -> Node:
+	if _loc_cached != null and is_instance_valid(_loc_cached):
+		return _loc_cached
+	var tree := get_tree() if is_inside_tree() else null
+	if tree != null and tree.root != null:
+		_loc_cached = tree.root.get_node_or_null("Locale")
+	if _loc_cached == null:
+		_loc_cached = (load("res://scripts/Locale.gd") as GDScript).new()
+		_loc_cached.call("load_strings")
+	return _loc_cached
+
+func _t(key: String) -> String:
+	var l := _loc()
+	return l.t(key) if l != null else key
 
 func setup(hub, p_id: String) -> void:
 	chat_hub = hub
@@ -26,6 +46,10 @@ func setup(hub, p_id: String) -> void:
 	if chat_hub != null:
 		chat_hub.message_posted.connect(_on_message_posted)
 		chat_hub.presence_changed.connect(_on_presence_changed)
+	# 语言切换时即时重译（面板打开期间切换也能立刻生效）。
+	var l := _loc()
+	if l != null and not l.language_changed.is_connected(_retranslate):
+		l.language_changed.connect(_retranslate)
 	_refresh()
 	close()
 
@@ -103,7 +127,7 @@ func _refresh_presence() -> void:
 	for c in _presence_box.get_children():
 		c.queue_free()
 	var title := Label.new()
-	title.text = "在线"
+	title.text = _t("CHAT_ONLINE")
 	_presence_box.add_child(title)
 	for e in chat_hub.entities():
 		var eid := str(e["id"])
@@ -111,7 +135,8 @@ func _refresh_presence() -> void:
 		var status := str(e.get("status", ""))
 		var row := HBoxContainer.new()
 		var btn := Button.new()
-		btn.text = "%s %s%s" % [icon, str(e["name"]), ("  ·  " + status if status != "" else "")]
+		var status_text := _t("CHAT_PRESENCE_STATUS") % status if status != "" else ""
+		btn.text = _t("CHAT_PRESENCE_ROW") % [icon, str(e["name"]), status_text]
 		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var target := "" if eid == player_id else eid    # 点名字：自己=回大厅，别人=私聊
@@ -119,15 +144,15 @@ func _refresh_presence() -> void:
 		row.add_child(btn)
 		if eid != player_id:                              # 别人：加「前往」按钮，传送过去参观
 			var go := Button.new()
-			go.text = "前往"
-			go.tooltip_text = "传送到 ta 旁边参观"
+			go.text = _t("CHAT_VISIT")
+			go.tooltip_text = _t("CHAT_VISIT_TOOLTIP")
 			go.pressed.connect(func() -> void: visit_requested.emit(eid))
 			row.add_child(go)
 		_presence_box.add_child(row)
 
 func _refresh_log() -> void:
 	if _channel_label != null:
-		_channel_label.text = "# 大厅" if current_channel == "" else "私聊 · " + _name_of(current_channel)
+		_channel_label.text = _t("CHAT_LOBBY") if current_channel == "" else _t("CHAT_DM") % _name_of(current_channel)
 	if _log_label != null:
 		_log_label.text = rendered_log()
 
@@ -185,6 +210,19 @@ func _build() -> void:
 	right.add_child(_log_label)
 
 	_input = LineEdit.new()
-	_input.placeholder_text = "说点什么…（Enter 发送，Esc 关闭）"
+	_input.placeholder_text = _t("CHAT_PLACEHOLDER")
 	_input.text_submitted.connect(_on_input_submitted)
 	right.add_child(_input)
+
+# i18n：把全部静态文案按当前语言重设一遍，并刷新动态在线列表 / 频道标题。
+func _retranslate() -> void:
+	if _input != null:
+		_input.placeholder_text = _t("CHAT_PLACEHOLDER")
+	# 在线列表（含「在线」标题、「前往」按钮）与频道标题随语言重建/重设。
+	_refresh()
+
+# 自动加载单例 Locale 比本面板存活更久：销毁时断开信号，避免悬空回调。
+func _exit_tree() -> void:
+	var l := _loc()
+	if l != null and l.language_changed.is_connected(_retranslate):
+		l.language_changed.disconnect(_retranslate)

@@ -290,7 +290,7 @@ func _pos_from_key(key: String) -> Vector3i:
 func _relative_direction_label(to_landmark: Vector3) -> String:
 	var flat := Vector3(to_landmark.x, 0.0, to_landmark.z)
 	if flat.length_squared() < 0.001:
-		return "附近"
+		return _t("HUD_NAV_NEARBY")
 	var basis := target.global_transform.basis if target.is_inside_tree() else target.transform.basis
 	var forward := -basis.z
 	var right := basis.x
@@ -298,14 +298,32 @@ func _relative_direction_label(to_landmark: Vector3) -> String:
 	var sector := int(round(angle / (PI / 4.0)))
 	sector = posmod(sector, 8)
 	match sector:
-		0: return "前方"
-		1: return "右前"
-		2: return "右侧"
-		3: return "右后"
-		4: return "后方"
-		5: return "左后"
-		6: return "左侧"
-		_: return "左前"
+		0: return _t("DIR_REL_FRONT")
+		1: return _t("DIR_REL_FRONT_RIGHT")
+		2: return _t("DIR_REL_RIGHT")
+		3: return _t("DIR_REL_BACK_RIGHT")
+		4: return _t("DIR_REL_BACK")
+		5: return _t("DIR_REL_BACK_LEFT")
+		6: return _t("DIR_REL_LEFT")
+		_: return _t("DIR_REL_FRONT_LEFT")
+
+# 经节点路径取 Locale 自动加载单例（不要用裸标识符 `Locale`）：见 HUD/Player 同款注释。
+# 仅相对方位词（前方/右前…）属于界面文案在此本地化；地标名称/类型仍为中文世界内容。
+var _loc_cached: Node
+func _loc() -> Node:
+	if _loc_cached != null and is_instance_valid(_loc_cached):
+		return _loc_cached
+	var tree := get_tree() if is_inside_tree() else null
+	if tree != null and tree.root != null:
+		_loc_cached = tree.root.get_node_or_null("Locale")
+	if _loc_cached == null:
+		_loc_cached = (load("res://scripts/Locale.gd") as GDScript).new()
+		_loc_cached.call("load_strings")
+	return _loc_cached
+
+func _t(key: String) -> String:
+	var l := _loc()
+	return l.t(key) if l != null else key
 
 func _load_discoveries_from_world() -> void:
 	_discovered.clear()

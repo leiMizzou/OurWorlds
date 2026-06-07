@@ -1,6 +1,11 @@
 extends CharacterBody3D
 # 第一人称/第三人称：鼠标转视角、WASD 走、空格跳、双击空格切飞行、F5 切视角、Esc 放/抓鼠标。
 # 顺带管"挖/放/准星高亮"和快捷栏选块（v1 先放一起，以后可拆成 Interactor）。
+#
+# i18n：动作反馈 / 建造意图等界面文案经 _loc()（/root/Locale 节点路径）取当前语言，
+# 而不是裸标识符 `Locale`（GDScript 在 `godot --script` 编译被 preload 的脚本时不注入
+# autoload 全局名）。这些文案由信号发给 HUD 或被 HUD 每帧拉取，无需在本节点常驻重译。
+# 建造模板「名称」（平台/立柱…）属于世界内容，保持中文，仅翻译包裹它的界面词（模板/朝向）。
 
 const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
 const Chunk = preload("res://scripts/Chunk.gd")
@@ -168,6 +173,23 @@ func _exit_tree() -> void:
 	_free_overlay_node(placement_blocked_preview)
 	_free_overlay_node(brush_preview_lines)
 
+# 经节点路径取 Locale 自动加载单例（不要用裸标识符 `Locale`）：见顶部 i18n 注释。
+var _loc_cached: Node
+func _loc() -> Node:
+	if _loc_cached != null and is_instance_valid(_loc_cached):
+		return _loc_cached
+	var tree := get_tree() if is_inside_tree() else null
+	if tree != null and tree.root != null:
+		_loc_cached = tree.root.get_node_or_null("Locale")
+	if _loc_cached == null:
+		_loc_cached = (load("res://scripts/Locale.gd") as GDScript).new()
+		_loc_cached.call("load_strings")
+	return _loc_cached
+
+func _t(key: String) -> String:
+	var l := _loc()
+	return l.t(key) if l != null else key
+
 func current_block() -> int:
 	if lib != null and lib.has_def(selected_block_id):
 		return selected_block_id
@@ -184,7 +206,7 @@ func select_block_id(id: int, feedback_kind: String = "select") -> bool:
 			break
 	var label := lib.block_name(current_block())
 	if feedback_kind == "pick":
-		label = "拾取 %s" % label
+		label = _t("BUILD_PICK") % label
 	action_feedback.emit(feedback_kind, label)
 	return true
 
@@ -282,11 +304,11 @@ func _on_key(code: int) -> void:
 		if now - _last_space < 300:        # 双击跳跃键 = 切换飞行
 			fly = not fly
 			velocity.y = 0.0
-			action_feedback.emit("mode", "飞行" if fly else "步行")
+			action_feedback.emit("mode", _t("HUD_MODE_FLY") if fly else _t("HUD_MODE_WALK"))
 		_last_space = now
 	elif _action_matches("cycle_recent", code):
 		if not cycle_recent(1):
-			action_feedback.emit("blocked", "没有最近材料")
+			action_feedback.emit("blocked", _t("FEEDBACK_NO_RECENT_MATERIAL"))
 	elif _action_matches("toggle_brush", code):
 		_toggle_build_brush()
 	elif _action_matches("prev_template", code):
@@ -339,14 +361,14 @@ func _on_click(button: int) -> void:
 
 func pick_target_block() -> bool:
 	if not _has_target or world == null or lib == null:
-		action_feedback.emit("blocked", "没有可拾取方块")
+		action_feedback.emit("blocked", _t("FEEDBACK_NO_PICK_BLOCK"))
 		return false
 	var block_id: int = world.get_block(_target.x, _target.y, _target.z)
 	if not lib.is_renderable(block_id):
-		action_feedback.emit("blocked", "无法拾取")
+		action_feedback.emit("blocked", _t("FEEDBACK_CANNOT_PICK"))
 		return false
 	if not select_block_id(block_id, "pick"):
-		action_feedback.emit("blocked", "无法拾取")
+		action_feedback.emit("blocked", _t("FEEDBACK_CANNOT_PICK"))
 		return false
 	material_picked.emit(block_id)
 	return true
@@ -389,9 +411,9 @@ func _try_place_current() -> bool:
 	if placed > 0:
 		var label := build_template_label() if _template_uses_fixed_blocks() else lib.block_name(block_id)
 		if build_template_id() != "off" and not _template_uses_fixed_blocks():
-			label = build_template_label() + " " + label
+			label = _t("BUILD_TEMPLATE_PREFIX") % [build_template_label(), label]
 		if placed > 1:
-			label = "%s x%d" % [label, placed]
+			label = _t("BUILD_COUNT_SUFFIX") % [label, placed]
 		action_feedback.emit("place", label)
 		if placed >= BULK_PLACE_EFFECT_THRESHOLD and build_template_id() != "campfire":
 			world_feedback.emit("bulk_place", _bulk_feedback_cell(edits), _bulk_feedback_block_id(edits))
@@ -402,7 +424,7 @@ func _try_place_current() -> bool:
 			var c: Vector3i = edit["pos"]
 			world_feedback.emit("place", c, int(edit["id"]))
 		return true
-	action_feedback.emit("blocked", "无法放置")
+	action_feedback.emit("blocked", _t("FEEDBACK_CANNOT_PLACE"))
 	world_feedback.emit("blocked", _place, block_id)
 	return false
 
@@ -426,12 +448,12 @@ func _try_break_target() -> bool:
 			if world.request_edit(c.x, c.y, c.z, BlockLibrary.AIR):
 				changed += 1
 	if changed <= 0:
-		action_feedback.emit("blocked", "没有可挖掘方块")
+		action_feedback.emit("blocked", _t("FEEDBACK_NO_BREAK_BLOCK"))
 		world_feedback.emit("blocked", _target, BlockLibrary.AIR)
 		return false
-	var label := "挖掘"
+	var label := _t("BUILD_MINE")
 	if changed > 1:
-		label = "挖掘 x%d" % changed
+		label = _t("BUILD_COUNT_SUFFIX") % [_t("BUILD_MINE"), changed]
 	action_feedback.emit("break", label)
 	var emitted := 0
 	for entry in removed:
@@ -506,7 +528,7 @@ func _check_void_respawn() -> void:
 	var sy: int = world.surface_y(gx, gz)
 	global_position = Vector3(gx + 0.5, float(sy) + 3.0, gz + 0.5)
 	velocity = Vector3.ZERO
-	action_feedback.emit("blocked", "已脱离虚空，重生回地面")
+	action_feedback.emit("blocked", _t("FEEDBACK_VOID_RESPAWN"))
 
 # 落地 / 入水的音频事件（脚步在 _update_camera_motion 里按步幅触发）。
 func _update_ground_audio() -> void:
@@ -588,14 +610,14 @@ func _update_placement_preview() -> void:
 
 func placement_intent_summary() -> Dictionary:
 	var mode := build_mode_label()
-	var material := lib.block_name(current_block()) if lib != null else "材料"
+	var material := lib.block_name(current_block()) if lib != null else _t("BUILD_MATERIAL_FALLBACK")
 	if not _has_target:
 		return {
-			"state": "等待目标",
+			"state": _t("BUILD_AWAIT_TARGET"),
 			"state_kind": "idle",
 			"mode": mode,
 			"material": material,
-			"detail": "未瞄准方块",
+			"detail": _t("BUILD_NO_AIM"),
 			"count": 0,
 			"blocked_count": 0,
 			"footprint": "",
@@ -607,15 +629,15 @@ func placement_intent_summary() -> Dictionary:
 	var blocked_cells := _blocked_placement_cells(cells)
 	var footprint := _placement_footprint_label(cells)
 	var count := cells.size()
-	var material_label := "多材质" if _template_uses_fixed_blocks() else material
-	var detail := "%s · %d 格" % [material_label, count]
+	var material_label := _t("BUILD_MULTI_MATERIAL") if _template_uses_fixed_blocks() else material
+	var detail := _t("BUILD_DETAIL") % [material_label, count]
 	if footprint != "":
-		detail = "%s · %s" % [detail, footprint]
-	var state := "可放置"
+		detail = _t("BUILD_DETAIL_FOOTPRINT") % [detail, footprint]
+	var state := _t("BUILD_PLACEABLE")
 	var state_kind := "ok"
 	if reason != "":
 		state_kind = "blocked"
-		state = "阻挡 %d 格" % maxi(1, blocked_cells.size())
+		state = _t("BUILD_BLOCKED_COUNT") % maxi(1, blocked_cells.size())
 	return {
 		"state": state,
 		"state_kind": state_kind,
@@ -630,10 +652,10 @@ func placement_intent_summary() -> Dictionary:
 
 func build_mode_label() -> String:
 	if build_template_id() != "off":
-		return "模板 %s %s" % [build_template_label(), build_template_orientation_label()]
+		return _t("BUILD_MODE_TEMPLATE") % [build_template_label(), build_template_orientation_label()]
 	if brush_radius() > 0:
-		return "画笔 " + brush_label()
-	return "单格"
+		return _t("BUILD_MODE_BRUSH") % brush_label()
+	return _t("BUILD_MODE_SINGLE")
 
 func _placement_footprint_label(cells: Array) -> String:
 	if cells.is_empty():
@@ -649,7 +671,7 @@ func _placement_footprint_label(cells: Array) -> String:
 		max_cell.y = maxi(max_cell.y, c.y)
 		max_cell.z = maxi(max_cell.z, c.z)
 	var size := max_cell - min_cell + Vector3i.ONE
-	return "占地 %dx%dx%d" % [size.x, size.y, size.z]
+	return _t("BUILD_FOOTPRINT") % [size.x, size.y, size.z]
 
 func _can_place_at(cell: Vector3i) -> bool:
 	return _place_blocked_reason(cell) == ""
@@ -700,7 +722,7 @@ func _toggle_build_brush() -> void:
 	brush_index = posmod(brush_index + 1, BRUSH_RADII.size())
 	if brush_radius() > 0:
 		template_index = 0
-	action_feedback.emit("mode", "画笔 " + brush_label())
+	action_feedback.emit("mode", _t("BUILD_MODE_BRUSH") % brush_label())
 
 func build_template_id() -> String:
 	var meta: Dictionary = BUILD_TEMPLATES[template_index]
@@ -727,7 +749,7 @@ func build_template_label_at(index: int) -> String:
 func build_template_orientation_label() -> String:
 	if build_template_id() == "off":
 		return ""
-	return "东西" if template_orientation_index == 0 else "南北"
+	return _t("BUILD_ORIENT_EW") if template_orientation_index == 0 else _t("BUILD_ORIENT_NS")
 
 # ---------- 外部代理 / 脚本入口：按模板 id 在指定锚点一键放置 ----------
 # 纯几何由 BuildTemplates.edits_for 计算（不依赖 Player 上下文）；
@@ -766,7 +788,7 @@ func _step_build_template(step: int) -> void:
 
 func _rotate_build_template() -> bool:
 	if build_template_id() == "off":
-		action_feedback.emit("blocked", "先选择模板")
+		action_feedback.emit("blocked", _t("FEEDBACK_SELECT_TEMPLATE_FIRST"))
 		return false
 	template_orientation_index = posmod(template_orientation_index + 1, 2)
 	action_feedback.emit("mode", _build_template_status_label())
@@ -776,8 +798,8 @@ func _rotate_build_template() -> bool:
 
 func _build_template_status_label() -> String:
 	if build_template_id() == "off":
-		return "模板 关闭"
-	return "模板 %s %s" % [build_template_label(), build_template_orientation_label()]
+		return _t("BUILD_TEMPLATE_OFF")
+	return _t("BUILD_MODE_TEMPLATE") % [build_template_label(), build_template_orientation_label()]
 
 func _placement_cells() -> Array:
 	var template_cells := _edit_cells(_template_edits())
@@ -1070,14 +1092,14 @@ func _hide_build_overlays() -> void:
 
 func _place_blocked_reason(cell: Vector3i) -> String:
 	if world == null or lib == null:
-		return "无法放置"
+		return _t("BLOCKED_CANNOT_PLACE")
 	if cell.y < 0 or cell.y >= Chunk.SY:
-		return "超出建造高度"
+		return _t("BLOCKED_ABOVE_HEIGHT")
 	if _blocked_by_self(cell):
-		return "会卡住玩家"
+		return _t("BLOCKED_TRAP_PLAYER")
 	var existing: int = world.get_block(cell.x, cell.y, cell.z)
 	if existing != BlockLibrary.AIR and lib.is_solid(existing):
-		return "目标格已占用"
+		return _t("BLOCKED_CELL_OCCUPIED")
 	return ""
 
 func _blocked_by_self(cell: Vector3i) -> bool:

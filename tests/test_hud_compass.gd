@@ -3,6 +3,7 @@ extends SceneTree
 #   godot --headless --path <项目> --script res://tests/test_hud_compass.gd
 
 const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
+const GameSettings = preload("res://scripts/GameSettings.gd")
 
 var _f := 0
 var _main = null
@@ -22,6 +23,8 @@ func _process(_delta: float) -> bool:
 		OS.set_environment("VC_SKIP_TITLE", "1")
 		OS.set_environment("VC_SEED", "6161")
 		OS.set_environment("VC_SETTINGS_PATH", "user://tests/hud_compass/settings.json")
+		# 预置 language=zh，使断言里的中文文案不受运行机 OS 语言影响（确定性回归）。
+		_seed_language("zh")
 		_main = load("res://scenes/Main.tscn").instantiate()
 		root.add_child(_main)
 	elif _f == 35:
@@ -69,3 +72,9 @@ func _raise_repair_to(world, landmark: Vector3i, target_count: int) -> void:
 			if int(world.edited_blocks_near(landmark)) >= target_count:
 				return
 			world.set_block(landmark.x + dx, landmark.y + 1, landmark.z + dz, BlockLibrary.MOONSTONE_LAMP)
+
+# 写入仅含 language 的设置文件；Main 启动会据此把界面语言定为该语言。
+func _seed_language(lang: String) -> void:
+	var settings := GameSettings.load_settings()
+	settings["language"] = lang
+	GameSettings.save_settings(settings)

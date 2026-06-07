@@ -2,6 +2,8 @@ extends SceneTree
 # 验证 ChatPanel 与 Main 接线：在线列表、大厅/私聊渲染、开关、玩家提交。
 #   godot --headless --path <项目> --script res://tests/test_chat_panel.gd
 
+const GameSettings = preload("res://scripts/GameSettings.gd")
+
 var _f := 0
 var _main = null
 var failed := 0
@@ -19,6 +21,8 @@ func _process(_delta: float) -> bool:
 		OS.set_environment("VC_NO_SAVE", "1")
 		OS.set_environment("VC_SKIP_TITLE", "1")
 		OS.set_environment("VC_SETTINGS_PATH", "user://tests/chat_panel/settings.json")
+		# 预置 language=zh，使断言里的中文文案不受运行机 OS 语言影响（确定性回归）。
+		_seed_language("zh")
 		_main = load("res://scenes/Main.tscn").instantiate()
 		root.add_child(_main)
 		return false
@@ -86,3 +90,9 @@ func _run() -> void:
 		if str(m["text"]) == "回你私聊" and str(m["from"]) == "player":
 			found = true
 	check(found, "私聊频道提交 -> 发给该 agent 的 DM")
+
+# 写入仅含 language 的设置文件；Main 启动会据此把界面语言定为该语言。
+func _seed_language(lang: String) -> void:
+	var settings := GameSettings.load_settings()
+	settings["language"] = lang
+	GameSettings.save_settings(settings)

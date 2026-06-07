@@ -313,7 +313,7 @@ func _enter_world(seed_value: int, spawn_override) -> void:
 		set_title_active(true)
 	_show_backup_recovery_feedback_if_needed()
 	chat_hub = ChatHub.new()
-	chat_hub.register("player", "你", "human")
+	chat_hub.register("player", _t("CHAT_SELF"), "human")
 	chat_panel = ChatPanel.new()
 	add_child(chat_panel)
 	chat_panel.setup(chat_hub, "player")
@@ -592,7 +592,7 @@ func _show_backup_recovery_feedback_if_needed() -> void:
 	if _title_active or hud == null or not hud.visible:
 		return
 	_backup_recovery_feedback_shown = true
-	var label := "已从备份恢复世界，请保存"
+	var label := _t("FEEDBACK_BACKUP_RECOVERY")
 	hud.show_feedback("save", label)
 	if audio_feedback != null:
 		audio_feedback.play_feedback("save", label)
@@ -1127,6 +1127,8 @@ func _journal_data() -> Dictionary:
 			region_detail = world.region_description(int(floor(player_pos.x)), int(floor(player_pos.z)))
 	elif world != null and player != null and world.has_method("region_description"):
 		region_detail = world.region_description(int(floor(player_pos.x)), int(floor(player_pos.z)))
+	# 注：save_status 是被「未迁移」的旅行手记/地图面板共享读取的数据，保持中文以免那些
+	# 面板出现中英混排；暂停菜单摘要（已迁移）在 _pause_summary_data() 里改用本地化版本。
 	var save_status := "本地会话"
 	if world != null and world.save_path != "":
 		save_status = "有改动" if world.has_unsaved_changes() else "已保存"
@@ -1196,7 +1198,7 @@ func _restoration_target_data(landmarks: Array) -> Dictionary:
 	var pos := _landmark_entry_world_pos(target)
 	return {
 			"key": String(target.get("key", "")),
-			"label": String(target.get("label", "古遗迹")),
+			"label": String(target.get("label", _t("LANDMARK_FALLBACK"))),
 			"restore_percent": int(target.get("restore_percent", 0)),
 			"restore_label": String(target.get("restore_label", "待修复")),
 			"restore_complete": _landmark_entry_complete(target),
@@ -1229,10 +1231,10 @@ func _flat_distance_to_player(target_pos: Vector3) -> int:
 
 func _navigation_label(distance: int, direction: String) -> String:
 	if distance < 18:
-		return "附近"
+		return _t("HUD_NAV_NEARBY")
 	if direction == "":
-		return "%dm" % distance
-	return "%s %dm" % [direction, distance]
+		return _t("NAV_DIST") % distance
+	return _t("NAV_DIR_DIST") % [direction, distance]
 
 func _open_pause_menu() -> void:
 	if pause_menu == null:
@@ -1242,6 +1244,11 @@ func _open_pause_menu() -> void:
 
 func _pause_summary_data() -> Dictionary:
 	var data := _journal_data()
+	# 暂停菜单摘要已迁移到 Locale：把存档状态换成本地化文案（手记/地图仍读 _journal_data 的中文）。
+	if world != null and world.save_path != "":
+		data["save_status"] = _t("SAVE_UNSAVED") if world.has_unsaved_changes() else _t("SAVE_SAVED")
+	else:
+		data["save_status"] = _t("SAVE_LOCAL_SESSION")
 	var steps: Array = data.get("journey_steps", [])
 	data["journey_count"] = steps.size()
 	data["next_journey_label"] = _next_journey_label(steps)
@@ -1268,7 +1275,7 @@ func _pause_summary_data() -> Dictionary:
 	data["restored_count"] = restored
 	data["best_restore_percent"] = best_percent
 	if not target.is_empty():
-		data["restoration_target_label"] = String(target.get("label", "古遗迹"))
+		data["restoration_target_label"] = String(target.get("label", _t("LANDMARK_FALLBACK")))
 		data["restoration_target_percent"] = int(target.get("restore_percent", 0))
 	return data
 
@@ -1454,7 +1461,7 @@ func _flush_repair_feedback() -> void:
 	var best_key := String(best.get("key", ""))
 	var best_percent := int(best.get("restore_percent", 0))
 	_landmark_restore_seen[best_key] = _repair_feedback_bucket(best_percent)
-	var label := String(best.get("label", "古遗迹"))
+	var label := String(best.get("label", _t("LANDMARK_FALLBACK")))
 	var feedback_label := ""
 	if bool(best.get("restore_complete", false)):
 		feedback_label = "遗迹修复完成：" + label
@@ -1582,7 +1589,7 @@ func _sync_hud_restoration() -> void:
 	var target_distance := -1
 	var target_direction := ""
 	if not target.is_empty():
-		label = String(target.get("label", "古遗迹"))
+		label = String(target.get("label", _t("LANDMARK_FALLBACK")))
 		target_percent = int(target.get("restore_percent", -1))
 		target_complete = bool(target.get("restore_complete", false)) or target_percent >= 100
 		target_pos = _landmark_entry_world_pos(target)
@@ -1644,46 +1651,64 @@ func _home_distance() -> int:
 
 func _direction_label_to(target_pos: Vector3) -> String:
 	if player == null:
-		return "附近"
+		return _t("HUD_NAV_NEARBY")
 	var p := player.global_position
 	var flat := Vector3(target_pos.x - p.x, 0.0, target_pos.z - p.z)
 	if flat.length_squared() < 0.001:
-		return "附近"
+		return _t("HUD_NAV_NEARBY")
 	var basis: Basis = player.global_transform.basis if player.is_inside_tree() else player.transform.basis
 	var forward: Vector3 = -basis.z
 	var right: Vector3 = basis.x
 	var angle := atan2(flat.normalized().dot(right), flat.normalized().dot(forward))
 	var sector := posmod(int(round(angle / (PI / 4.0))), 8)
 	match sector:
-		0: return "前方"
-		1: return "右前"
-		2: return "右侧"
-		3: return "右后"
-		4: return "后方"
-		5: return "左后"
-		6: return "左侧"
-		_: return "左前"
+		0: return _t("DIR_REL_FRONT")
+		1: return _t("DIR_REL_FRONT_RIGHT")
+		2: return _t("DIR_REL_RIGHT")
+		3: return _t("DIR_REL_BACK_RIGHT")
+		4: return _t("DIR_REL_BACK")
+		5: return _t("DIR_REL_BACK_LEFT")
+		6: return _t("DIR_REL_LEFT")
+		_: return _t("DIR_REL_FRONT_LEFT")
 
 func _journey_label(key: String) -> String:
 	match key:
 		"explore":
-			return "探索附近地形"
+			return _t("JOURNEY_EXPLORE")
 		"select_material":
-			return "选择材料"
+			return _t("JOURNEY_SELECT_MATERIAL")
 		"open_palette":
-			return "打开材料库"
+			return _t("JOURNEY_OPEN_PALETTE")
 		"place_block":
-			return "放置方块"
+			return _t("JOURNEY_PLACE_BLOCK")
 		"use_template":
-			return "使用建造模板"
+			return _t("JOURNEY_USE_TEMPLATE")
 		"open_map":
-			return "查看世界地图"
+			return _t("JOURNEY_OPEN_MAP")
 		"discover_landmark":
-			return "记录遗迹"
+			return _t("JOURNEY_DISCOVER_LANDMARK")
 		"save_world":
-			return "保存世界"
+			return _t("JOURNEY_SAVE_WORLD")
 		_:
-			return "新的目标"
+			return _t("JOURNEY_NEW_GOAL")
+
+# i18n：经节点路径取 Locale 自动加载单例（不要用裸标识符 `Locale`），缓存以省去重复查找。
+# 运行期 /root/Locale 一定存在；缺失时退到脚本实例兜底（仅理论上）。
+var _loc_cached: Node
+func _loc() -> Node:
+	if _loc_cached != null and is_instance_valid(_loc_cached):
+		return _loc_cached
+	var tree := get_tree() if is_inside_tree() else null
+	if tree != null and tree.root != null:
+		_loc_cached = tree.root.get_node_or_null("Locale")
+	if _loc_cached == null:
+		_loc_cached = (load("res://scripts/Locale.gd") as GDScript).new()
+		_loc_cached.call("load_strings")
+	return _loc_cached
+
+func _t(key: String) -> String:
+	var l := _loc()
+	return l.t(key) if l != null else key
 
 func _apply_graphics_quality(value: String) -> void:
 	_graphics_quality = _sanitize_graphics_quality(value)

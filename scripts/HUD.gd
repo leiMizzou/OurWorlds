@@ -1,17 +1,21 @@
 extends CanvasLayer
 # 抬头显示：准星、状态条、快捷栏和轻量反馈。界面只负责信息层，不抢游戏输入。
+#
+# i18n：经 _loc()（/root/Locale 节点路径）访问 Locale 单例，而不是裸标识符 `Locale` ——
+# 因为 GDScript 在 `godot --script` 编译被 preload 的脚本时不会注入 autoload 全局名。
+# JOURNEY_GUIDE 存 i18n key（label_key/hint_key），用时经 _t() 取当前语言文案。
 
 const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
 
 const JOURNEY_GUIDE := [
-	{"key": "explore", "label": "探索附近地形", "hint": "WASD"},
-	{"key": "select_material", "label": "选择一种材料", "hint": "数字键 / 滚轮"},
-	{"key": "open_palette", "label": "打开材料库", "hint": "E"},
-	{"key": "place_block", "label": "放置一个方块", "hint": "右键"},
-	{"key": "use_template", "label": "使用建造模板", "hint": "T 后右键"},
-	{"key": "open_map", "label": "查看世界地图", "hint": "M"},
-	{"key": "discover_landmark", "label": "记录一处遗迹", "hint": "跟随线索"},
-	{"key": "save_world", "label": "保存世界", "hint": "Esc 后保存"},
+	{"key": "explore", "label_key": "JOURNEY_EXPLORE", "hint_key": "JOURNEY_HINT_WASD"},
+	{"key": "select_material", "label_key": "JOURNEY_SELECT_MATERIAL_HUD", "hint_key": "JOURNEY_HINT_NUMBER_WHEEL"},
+	{"key": "open_palette", "label_key": "JOURNEY_OPEN_PALETTE", "hint_key": "JOURNEY_HINT_E"},
+	{"key": "place_block", "label_key": "JOURNEY_PLACE_BLOCK_HUD", "hint_key": "JOURNEY_HINT_RIGHT_CLICK"},
+	{"key": "use_template", "label_key": "JOURNEY_USE_TEMPLATE", "hint_key": "JOURNEY_HINT_T_RIGHT"},
+	{"key": "open_map", "label_key": "JOURNEY_OPEN_MAP", "hint_key": "JOURNEY_HINT_M"},
+	{"key": "discover_landmark", "label_key": "JOURNEY_DISCOVER_LANDMARK_HUD", "hint_key": "JOURNEY_HINT_FOLLOW_CLUE"},
+	{"key": "save_world", "label_key": "JOURNEY_SAVE_WORLD", "hint_key": "JOURNEY_HINT_ESC_SAVE"},
 ]
 
 var lib: BlockLibrary
@@ -37,6 +41,7 @@ var _build_state_label: Label
 var _recent_row: HBoxContainer
 var _template_panel: PanelContainer
 var _template_row: HBoxContainer
+var _template_title_label: Label
 var _template_orientation_label: Label
 var _recent_slots := []
 var _recent_blocks := []
@@ -77,6 +82,25 @@ var _focused_restore_percent := -1
 var _focused_restore_complete := false
 var _focused_landmark_distance := -1
 var _focused_landmark_direction := ""
+var _save_enabled := true           # 记住存档是否启用，供切语言时重算 _save_status
+var _save_unsaved := false          # 记住是否有未保存改动，供切语言时重算 _save_status
+var _loc_cached: Node               # 缓存的 Locale 自动加载单例（经 /root/Locale 取，见 _loc()）
+
+# 经节点路径取 Locale 自动加载单例（不要用裸标识符 `Locale`）：见 TitleScreen/PauseMenu 同款注释。
+func _loc() -> Node:
+	if _loc_cached != null and is_instance_valid(_loc_cached):
+		return _loc_cached
+	var tree := get_tree() if is_inside_tree() else null
+	if tree != null and tree.root != null:
+		_loc_cached = tree.root.get_node_or_null("Locale")
+	if _loc_cached == null:
+		_loc_cached = (load("res://scripts/Locale.gd") as GDScript).new()
+		_loc_cached.call("load_strings")
+	return _loc_cached
+
+func _t(key: String) -> String:
+	var l := _loc()
+	return l.t(key) if l != null else key
 
 func setup(block_lib: BlockLibrary, p) -> void:
 	lib = block_lib
@@ -84,9 +108,15 @@ func setup(block_lib: BlockLibrary, p) -> void:
 	if player != null:
 		_start_pos = player.global_position
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	# 用当前语言初始化默认存档状态文案（运行期会被 set_save_state 覆盖）。
+	_save_status = _t("SAVE_SAVED")
 	_build()
 	if player != null and player.has_signal("action_feedback"):
 		player.action_feedback.connect(_on_player_action_feedback)
+	# 语言切换时即时重译（HUD 常驻，切语言后状态栏/向导/快捷栏全部重算）。
+	var l := _loc()
+	if l != null and not l.language_changed.is_connected(_retranslate):
+		l.language_changed.connect(_retranslate)
 
 func _build() -> void:
 	_style_normal = _panel_style(Color(0.05, 0.07, 0.09, 0.48), Color(1, 1, 1, 0.15), 1)
@@ -324,7 +354,7 @@ func _build_agent_badge(root: Control) -> void:
 	_agent_badge_label.theme_type_variation = "Body"
 	_agent_badge_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_agent_badge_label.clip_text = true
-	_agent_badge_label.text = "🤖 agent 已连接"
+	_agent_badge_label.text = _t("HUD_AGENT_CONNECTED")
 	_agent_badge_label.modulate = Color(0.82, 1.0, 0.9, 1.0)
 	margin.add_child(_agent_badge_label)
 
@@ -334,12 +364,12 @@ func set_agent_status(connected: bool, goal: String = "") -> void:
 		return
 	_agent_badge_panel.visible = connected
 	if connected:
-		var t := "🤖 agent 已连接"
+		var t := _t("HUD_AGENT_CONNECTED")
 		var g := goal.strip_edges()
 		if g != "":
 			if g.length() > 50:
 				g = g.substr(0, 50) + "…"
-			t += "  ·  目标：" + g
+			t = _t("HUD_AGENT_GOAL") % [t, g]
 		_agent_badge_label.text = t
 
 func _build_control_hint(root: Control) -> void:
@@ -370,7 +400,7 @@ func _build_control_hint(root: Control) -> void:
 	_control_hint_label = Label.new()
 	_control_hint_label.theme_type_variation = "Body"
 	_control_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_control_hint_label.text = "左键挖  ·  右键放  ·  E 材料库"
+	_control_hint_label.text = _t("HUD_CONTROL_HINT")
 	_control_hint_label.modulate = Color(1.0, 0.96, 0.82, 1.0)
 	margin.add_child(_control_hint_label)
 
@@ -477,13 +507,13 @@ func _build_template_strip(parent: VBoxContainer) -> void:
 	row.add_theme_constant_override("separation", 8)
 	margin.add_child(row)
 
-	var title := Label.new()
-	title.text = "模板"
-	title.custom_minimum_size = Vector2(42, 26)
-	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	title.theme_type_variation = "Caption"
-	title.modulate = Color(0.82, 0.92, 0.88, 0.92)
-	row.add_child(title)
+	_template_title_label = Label.new()
+	_template_title_label.text = _t("HUD_TEMPLATE_LABEL")
+	_template_title_label.custom_minimum_size = Vector2(42, 26)
+	_template_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_template_title_label.theme_type_variation = "Caption"
+	_template_title_label.modulate = Color(0.82, 0.92, 0.88, 0.92)
+	row.add_child(_template_title_label)
 
 	_template_row = HBoxContainer.new()
 	_template_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -622,34 +652,34 @@ func _process(delta: float) -> void:
 # 顶栏：模式 · ◇区域 · ◐天气 · ◆存档（+ 画笔/模板/遗迹）——分隔点 + 主次 modulate 分层。
 func _refresh_status_bar(p: Vector3) -> void:
 	var segments := PackedStringArray()
-	segments.append("创造 · %s" % ("飞行" if player.fly else "步行"))
-	segments.append("◇ %s" % _region_label)
-	segments.append("◐ %s" % _weather_label)
-	segments.append("◆ %s" % _save_status)
+	segments.append(_t("HUD_MODE_CREATIVE") % (_t("HUD_MODE_FLY") if player.fly else _t("HUD_MODE_WALK")))
+	segments.append(_t("HUD_STATUS_REGION") % _region_label)
+	segments.append(_t("HUD_STATUS_WEATHER") % _weather_label)
+	segments.append(_t("HUD_STATUS_SAVE") % _save_status)
 	var home := _home_status(p).strip_edges()
 	if home != "":
-		segments.append("⊙ %s" % home)
+		segments.append(_t("HUD_STATUS_HOME") % home)
 	if player.has_method("brush_label") and player.brush_label() != "1x1":
-		segments.append("▤ 画笔 %s" % player.brush_label())
+		segments.append(_t("HUD_STATUS_BRUSH") % player.brush_label())
 	if player.has_method("build_template_id") and player.build_template_id() != "off":
 		var orientation := ""
 		if player.has_method("build_template_orientation_label"):
 			orientation = " " + player.build_template_orientation_label()
-		segments.append("▣ 模板 %s%s" % [player.build_template_label(), orientation])
+		segments.append(_t("HUD_STATUS_TEMPLATE") % [player.build_template_label(), orientation])
 	if _discovery_count > 0:
-		segments.append("◎ 遗迹 %d" % _discovery_count)
+		segments.append(_t("HUD_STATUS_RELIC_COUNT") % _discovery_count)
 	elif _nearby_landmark_distance >= 0:
-		segments.append("◎ 附近遗迹 %dm %s" % [_nearby_landmark_distance, _nearby_landmark_direction])
-	_status_label.text = "   ·   ".join(segments)
+		segments.append(_t("HUD_STATUS_RELIC_NEARBY") % [_nearby_landmark_distance, _nearby_landmark_direction])
+	_status_label.text = _t("HUD_STATUS_SEP").join(segments)
 	# 主次分层：有未保存改动时整条略提亮强调，已保存时回到沉静主色。
-	var has_unsaved := _save_status == "有改动"
+	var has_unsaved := _save_status == _t("SAVE_UNSAVED")
 	_status_label.modulate = Color(1.0, 0.97, 0.86, 0.98) if has_unsaved else Color(0.92, 0.96, 1.0, 0.92)
 
 # 坐标移到右下角小字（Caption），含归途提示，给顶栏减负。
 func _refresh_coords(p: Vector3) -> void:
 	if _coords_label == null:
 		return
-	_coords_label.text = "X %d   Y %d   Z %d" % [int(p.x), int(p.y), int(p.z)]
+	_coords_label.text = _t("HUD_COORDS") % [int(p.x), int(p.y), int(p.z)]
 
 # 新手控制提示：首次进世界（edit_count==0）淡入；玩家第一次挖掘后淡出。纯 HUD 状态机。
 func _update_control_hint(delta: float) -> void:
@@ -753,10 +783,12 @@ func set_region_label(label: String) -> void:
 	_region_label = label
 
 func set_save_state(has_unsaved: bool, enabled: bool = true) -> void:
+	_save_enabled = enabled
+	_save_unsaved = has_unsaved
 	if not enabled:
-		_save_status = "本地会话"
+		_save_status = _t("SAVE_LOCAL_SESSION")
 	else:
-		_save_status = "有改动" if has_unsaved else "已保存"
+		_save_status = _t("SAVE_UNSAVED") if has_unsaved else _t("SAVE_SAVED")
 
 func set_discovery_count(value: int) -> void:
 	_discovery_count = maxi(0, value)
@@ -876,7 +908,7 @@ func _refresh_build_intent() -> void:
 		return
 	_build_intent_panel.visible = true
 	var data: Dictionary = player.placement_intent_summary()
-	var mode := String(data.get("mode", "单格"))
+	var mode := String(data.get("mode", _t("BUILD_MODE_SINGLE")))
 	var detail := String(data.get("detail", ""))
 	var state := String(data.get("state", ""))
 	var reason := String(data.get("reason", ""))
@@ -903,13 +935,13 @@ func _update_guide(pos: Vector3) -> void:
 		var key := String(meta.get("key", ""))
 		if _journey_goal_done(key, pos):
 			continue
-		var label := String(meta.get("label", "目标"))
+		var label := _t(String(meta.get("label_key", "HUD_GUIDE_DEFAULT_GOAL")))
 		if key == "discover_landmark" and _nearby_landmark_distance >= 0:
-			label = "%s（%s约 %dm）" % [label, _nearby_landmark_direction, _nearby_landmark_distance]
-		var hint := String(meta.get("hint", ""))
-		if hint != "":
-			label = "%s  ·  %s" % [label, hint]
-		_guide_label.text = "目标 %d/%d：%s" % [i + 1, _journey_total, label]
+			label = _t("HUD_GUIDE_GOAL_NEARBY") % [label, _nearby_landmark_direction, _nearby_landmark_distance]
+		var hint_key := String(meta.get("hint_key", ""))
+		if hint_key != "":
+			label = _t("HUD_GUIDE_GOAL_HINT") % [label, _t(hint_key)]
+		_guide_label.text = _t("HUD_GUIDE_GOAL") % [i + 1, _journey_total, label]
 		return
 	if _focused_landmark_label != "" and not _focused_restore_complete:
 		var details := PackedStringArray()
@@ -918,48 +950,48 @@ func _update_guide(pos: Vector3) -> void:
 		var nav := _focused_navigation_label()
 		if nav != "":
 			details.append(nav)
-		var suffix := "（%s）" % "，".join(details) if not details.is_empty() else ""
-		_guide_label.text = "目标：修复%s%s  ·  右键建造修复" % [_focused_landmark_label, suffix]
+		var suffix := _t("HUD_GUIDE_REPAIR_SUFFIX") % "，".join(details) if not details.is_empty() else ""
+		_guide_label.text = _t("HUD_GUIDE_REPAIR_TARGET") % [_focused_landmark_label, suffix]
 	elif _restored_landmark_count > 0:
 		var best_text := ""
 		if _best_restore_percent > 0:
-			best_text = "  最佳 %d%%" % _best_restore_percent
-		_guide_label.text = "目标：寻找下一处遗迹  已修复 %d%s  ·  跟随线索" % [_restored_landmark_count, best_text]
+			best_text = _t("HUD_GUIDE_BEST_SUFFIX") % _best_restore_percent
+		_guide_label.text = _t("HUD_GUIDE_FIND_NEXT") % [_restored_landmark_count, best_text]
 	elif _best_restore_percent > 0:
-		_guide_label.text = "目标：继续修复已发现的遗迹（最佳 %d%%）  ·  右键建造修复" % _best_restore_percent
+		_guide_label.text = _t("HUD_GUIDE_CONTINUE_REPAIR") % _best_restore_percent
 	elif _last_discovery_label != "":
-		_guide_label.text = "目标：修复%s  ·  右键建造修复" % _last_discovery_label
+		_guide_label.text = _t("HUD_GUIDE_REPAIR_LAST") % _last_discovery_label
 	elif _discovery_count > 0:
-		_guide_label.text = "目标：修复已发现的遗迹  ·  右键建造修复"
+		_guide_label.text = _t("HUD_GUIDE_REPAIR_DISCOVERED")
 	elif _nearby_landmark_distance >= 0:
-		_guide_label.text = "附近遗迹  %s  约 %dm  ·  前往记录" % [_nearby_landmark_direction, _nearby_landmark_distance]
+		_guide_label.text = _t("HUD_GUIDE_RELIC_NEARBY") % [_nearby_landmark_direction, _nearby_landmark_distance]
 	else:
-		_guide_label.text = "世界已就绪，开始建造  ·  E 材料 / M 地图"
+		_guide_label.text = _t("HUD_GUIDE_READY")
 
 func _refresh_compass(pos: Vector3) -> void:
 	if _compass_label == null:
 		return
 	var segments := []
-	segments.append("方位 " + _heading_label())
+	segments.append(_t("HUD_COMPASS_HEADING") % _heading_label())
 	var home_distance := Vector2(pos.x - _start_pos.x, pos.z - _start_pos.z).length()
 	if home_distance >= 18.0:
-		segments.append("归途 %dm %s" % [int(round(home_distance)), _relative_direction_label(_start_pos - pos)])
+		segments.append(_t("HUD_COMPASS_HOME") % [int(round(home_distance)), _relative_direction_label(_start_pos - pos)])
 	if _focused_landmark_label != "" and not _focused_restore_complete and _focused_landmark_distance >= 0:
-		var restore_direction := _focused_landmark_direction if _focused_landmark_direction != "" else "附近"
-		segments.append("修复 %dm %s" % [_focused_landmark_distance, restore_direction])
+		var restore_direction := _focused_landmark_direction if _focused_landmark_direction != "" else _t("HUD_NAV_NEARBY")
+		segments.append(_t("HUD_COMPASS_REPAIR") % [_focused_landmark_distance, restore_direction])
 	elif _nearby_landmark_distance >= 0:
-		var hint_direction := _nearby_landmark_direction if _nearby_landmark_direction != "" else "附近"
-		segments.append("线索 %dm %s" % [_nearby_landmark_distance, hint_direction])
+		var hint_direction := _nearby_landmark_direction if _nearby_landmark_direction != "" else _t("HUD_NAV_NEARBY")
+		segments.append(_t("HUD_COMPASS_CLUE") % [_nearby_landmark_distance, hint_direction])
 	_compass_label.text = _join_compass_segments(segments)
 
 func _focused_navigation_label() -> String:
 	if _focused_landmark_distance < 0:
 		return ""
 	if _focused_landmark_distance < 18:
-		return "附近"
+		return _t("HUD_NAV_NEARBY")
 	if _focused_landmark_direction == "":
-		return "约 %dm" % _focused_landmark_distance
-	return "%s约 %dm" % [_focused_landmark_direction, _focused_landmark_distance]
+		return _t("HUD_NAV_ABOUT") % _focused_landmark_distance
+	return _t("HUD_NAV_DIR_ABOUT") % [_focused_landmark_direction, _focused_landmark_distance]
 
 func _join_compass_segments(segments: Array) -> String:
 	var text := ""
@@ -971,22 +1003,22 @@ func _join_compass_segments(segments: Array) -> String:
 
 func _heading_label() -> String:
 	if player == null:
-		return "北"
+		return _t("DIR_N")
 	var basis: Basis = player.global_transform.basis if player.is_inside_tree() else player.transform.basis
 	var forward := Vector3(-basis.z.x, 0.0, -basis.z.z)
 	if forward.length_squared() < 0.001:
-		return "北"
+		return _t("DIR_N")
 	var angle := atan2(forward.normalized().x, -forward.normalized().z)
 	var sector := posmod(int(round(angle / (PI / 4.0))), 8)
 	match sector:
-		0: return "北"
-		1: return "东北"
-		2: return "东"
-		3: return "东南"
-		4: return "南"
-		5: return "西南"
-		6: return "西"
-		_: return "西北"
+		0: return _t("DIR_N")
+		1: return _t("DIR_NE")
+		2: return _t("DIR_E")
+		3: return _t("DIR_SE")
+		4: return _t("DIR_S")
+		5: return _t("DIR_SW")
+		6: return _t("DIR_W")
+		_: return _t("DIR_NW")
 
 func _journey_goal_done(key: String, pos: Vector3) -> bool:
 	if _journey_done(key):
@@ -1012,26 +1044,47 @@ func _home_status(pos: Vector3) -> String:
 	var distance := Vector2(pos.x - _start_pos.x, pos.z - _start_pos.z).length()
 	if distance < 18.0:
 		return ""
-	return "  归途 %dm %s" % [int(round(distance)), _relative_direction_label(_start_pos - pos)]
+	return _t("HUD_HOME_SUFFIX") % [int(round(distance)), _relative_direction_label(_start_pos - pos)]
 
 func _relative_direction_label(to_target: Vector3) -> String:
 	var flat := Vector3(to_target.x, 0.0, to_target.z)
 	if flat.length_squared() < 0.001 or player == null:
-		return "附近"
+		return _t("HUD_NAV_NEARBY")
 	var basis: Basis = player.global_transform.basis if player.is_inside_tree() else player.transform.basis
 	var forward: Vector3 = -basis.z
 	var right: Vector3 = basis.x
 	var angle := atan2(flat.normalized().dot(right), flat.normalized().dot(forward))
 	var sector := posmod(int(round(angle / (PI / 4.0))), 8)
 	match sector:
-		0: return "前方"
-		1: return "右前"
-		2: return "右侧"
-		3: return "右后"
-		4: return "后方"
-		5: return "左后"
-		6: return "左侧"
-		_: return "左前"
+		0: return _t("DIR_REL_FRONT")
+		1: return _t("DIR_REL_FRONT_RIGHT")
+		2: return _t("DIR_REL_RIGHT")
+		3: return _t("DIR_REL_BACK_RIGHT")
+		4: return _t("DIR_REL_BACK")
+		5: return _t("DIR_REL_BACK_LEFT")
+		6: return _t("DIR_REL_LEFT")
+		_: return _t("DIR_REL_FRONT_LEFT")
+
+# i18n：切语言时重设不随 _process 重算的静态文案 + 重算缓存的存档状态文案。
+# 状态栏 / 坐标 / 向导 / 罗盘 / 快捷栏材料名在 _process 里每帧经 _t() 重算，无需在此处理。
+func _retranslate() -> void:
+	if _control_hint_label != null:
+		_control_hint_label.text = _t("HUD_CONTROL_HINT")
+	if _template_title_label != null:
+		_template_title_label.text = _t("HUD_TEMPLATE_LABEL")
+	# 存档状态词只在 set_save_state 时计算，切语言需按记住的状态重算一次。
+	set_save_state(_save_unsaved, _save_enabled)
+	# agent 角标文案（含目标）按当前可见状态重设。
+	if _agent_badge_panel != null and _agent_badge_label != null and not _agent_badge_panel.visible:
+		_agent_badge_label.text = _t("HUD_AGENT_CONNECTED")
+	# 当前材料名按语言重取（_shown_block_id 缓存会跳过相同 id，这里强制刷新）。
+	_shown_block_id = -1
+
+# 自动加载单例 Locale 比 HUD 存活更久：销毁时断开信号，避免悬空回调。
+func _exit_tree() -> void:
+	var l := _loc()
+	if l != null and l.language_changed.is_connected(_retranslate):
+		l.language_changed.disconnect(_retranslate)
 
 func _add_bar(parent: Control, pos: Vector2, size: Vector2, color: Color) -> void:
 	var bar := ColorRect.new()

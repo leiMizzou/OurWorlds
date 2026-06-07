@@ -2,6 +2,8 @@ extends SceneTree
 # 验证备份恢复世界进入游戏后的 HUD / 音频反馈：
 #   godot --headless --path <项目> --script res://tests/test_backup_restore_feedback.gd
 
+const GameSettings = preload("res://scripts/GameSettings.gd")
+
 var _f := 0
 var _main = null
 var _main_skip = null
@@ -25,6 +27,8 @@ func _process(_delta: float) -> bool:
 		OS.set_environment("VC_SAVE_PATH", _title_path)
 		OS.set_environment("VC_SEED", "7171")
 		OS.set_environment("VC_SETTINGS_PATH", "user://tests/backup_feedback/title_settings.json")
+		# 预置 language=zh，使断言里的中文文案不受运行机 OS 语言影响（确定性回归）。
+		_seed_language("zh")
 		_main = load("res://scenes/Main.tscn").instantiate()
 		root.add_child(_main)
 	elif _f == 35:
@@ -52,6 +56,7 @@ func _process(_delta: float) -> bool:
 		OS.set_environment("VC_SAVE_PATH", _skip_path)
 		OS.set_environment("VC_SEED", "8181")
 		OS.set_environment("VC_SETTINGS_PATH", "user://tests/backup_feedback/skip_settings.json")
+		_seed_language("zh")
 		_main_skip = load("res://scenes/Main.tscn").instantiate()
 		root.add_child(_main_skip)
 	elif _f == 80:
@@ -108,3 +113,9 @@ func _write_text(path: String, text: String) -> void:
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	f.store_string(text)
 	f.close()
+
+# 写入仅含 language 的设置文件；Main 启动会据此把界面语言定为该语言。
+func _seed_language(lang: String) -> void:
+	var settings := GameSettings.load_settings()
+	settings["language"] = lang
+	GameSettings.save_settings(settings)

@@ -927,6 +927,8 @@ func _retranslate() -> void:
 	# 含数值/随模式变化的文案（视距/音量/灵敏度、副标题、继续按钮）。
 	_refresh_labels()
 	_refresh_mode()
+	# 摘要面板标签（世界/旅程/遗迹/位置/状态卡片）按当前语言重算。
+	_refresh_summary()
 
 # 自动加载单例 Locale 比本菜单存活更久：销毁时断开信号，避免悬空回调。
 func _exit_tree() -> void:
@@ -947,20 +949,20 @@ func _refresh_summary() -> void:
 	_summary_box.visible = not _title_settings_mode
 	if _title_settings_mode:
 		return
-	var world_name := String(_summary_data.get("world_name", "本地世界"))
+	var world_name := String(_summary_data.get("world_name", _loc().t("PAUSE_SUMMARY_WORLD_FALLBACK")))
 	var seed := int(_summary_data.get("seed", 0))
 	var edit_count := maxi(0, int(_summary_data.get("edit_count", 0)))
-	_world_summary_label.text = "世界：%s  #%d  编辑 %d 格" % [world_name, seed, edit_count]
+	_world_summary_label.text = _loc().t("PAUSE_SUMMARY_WORLD") % [world_name, seed, edit_count]
 
 	var journey_total := maxi(1, int(_summary_data.get("journey_total", 8)))
 	var journey_count := clampi(int(_summary_data.get("journey_count", 0)), 0, journey_total)
 	var next_label := String(_summary_data.get("next_journey_label", ""))
 	if journey_count >= journey_total:
-		_journey_summary_label.text = "旅程：%d/%d  首局目标完成" % [journey_count, journey_total]
+		_journey_summary_label.text = _loc().t("PAUSE_SUMMARY_JOURNEY_DONE") % [journey_count, journey_total]
 	elif next_label != "":
-		_journey_summary_label.text = "旅程：%d/%d  下个目标：%s" % [journey_count, journey_total, next_label]
+		_journey_summary_label.text = _loc().t("PAUSE_SUMMARY_JOURNEY_NEXT") % [journey_count, journey_total, next_label]
 	else:
-		_journey_summary_label.text = "旅程：%d/%d" % [journey_count, journey_total]
+		_journey_summary_label.text = _loc().t("PAUSE_SUMMARY_JOURNEY") % [journey_count, journey_total]
 
 	var discovered := maxi(0, int(_summary_data.get("discovered_count", 0)))
 	var restored := maxi(0, int(_summary_data.get("restored_count", 0)))
@@ -968,24 +970,24 @@ func _refresh_summary() -> void:
 	var target_label := String(_summary_data.get("restoration_target_label", ""))
 	var target_percent := int(_summary_data.get("restoration_target_percent", -1))
 	if target_label != "" and target_percent >= 0:
-		_landmark_summary_label.text = "遗迹：发现 %d  修复 %d  %s %d%%" % [discovered, restored, target_label, target_percent]
+		_landmark_summary_label.text = _loc().t("PAUSE_SUMMARY_RELIC_TARGET") % [discovered, restored, target_label, target_percent]
 	elif best_percent > 0:
-		_landmark_summary_label.text = "遗迹：发现 %d  修复 %d  最佳 %d%%" % [discovered, restored, best_percent]
+		_landmark_summary_label.text = _loc().t("PAUSE_SUMMARY_RELIC_BEST") % [discovered, restored, best_percent]
 	else:
-		_landmark_summary_label.text = "遗迹：发现 %d  修复 %d" % [discovered, restored]
+		_landmark_summary_label.text = _loc().t("PAUSE_SUMMARY_RELIC") % [discovered, restored]
 
-	var region := String(_summary_data.get("region", "未知区域"))
+	var region := String(_summary_data.get("region", _loc().t("REGION_UNKNOWN")))
 	var region_detail := String(_summary_data.get("region_detail", ""))
-	var region_text := "%s · %s" % [region, region_detail] if region_detail != "" else region
-	var weather := String(_summary_data.get("weather", "晴朗"))
-	var save_status := String(_summary_data.get("save_status", "本地会话"))
+	var region_text: String = _loc().t("PAUSE_SUMMARY_LOCATION_REGION") % [region, region_detail] if region_detail != "" else region
+	var weather := String(_summary_data.get("weather", _loc().t("PAUSE_SUMMARY_WEATHER_FALLBACK")))
+	var save_status := String(_summary_data.get("save_status", _loc().t("SAVE_LOCAL_SESSION")))
 	var home_distance := maxi(0, int(_summary_data.get("home_distance", 0)))
-	var home_direction := String(_summary_data.get("home_direction", "附近"))
-	var home_text := "附近" if home_distance < 18 else "%s %d 格" % [home_direction, home_distance]
+	var home_direction := String(_summary_data.get("home_direction", _loc().t("PAUSE_SUMMARY_HOME_DIR_FALLBACK")))
+	var home_text: String = _loc().t("PAUSE_SUMMARY_HOME_NEARBY") if home_distance < 18 else _loc().t("PAUSE_SUMMARY_HOME_DIR") % [home_direction, home_distance]
 	var region_count := int(_summary_data.get("region_count", 0))
 	var region_total := int(_summary_data.get("region_total", 0))
-	var region_progress := "    区域：%d/%d" % [region_count, region_total] if region_total > 0 else ""
-	_location_summary_label.text = "位置：%s  天气 %s\n归途：%s    存档：%s%s" % [region_text, weather, home_text, save_status, region_progress]
+	var region_progress: String = _loc().t("PAUSE_SUMMARY_REGION_PROGRESS") % [region_count, region_total] if region_total > 0 else ""
+	_location_summary_label.text = _loc().t("PAUSE_SUMMARY_LOCATION") % [region_text, weather, home_text, save_status, region_progress]
 	_refresh_summary_chips(journey_count, journey_total, next_label, discovered, restored, best_percent, target_label, target_percent, home_text, save_status)
 
 func _refresh_summary_chips(journey_count: int, journey_total: int, next_label: String, discovered: int, restored: int, best_percent: int, target_label: String, target_percent: int, home_text: String, save_status: String) -> void:
@@ -993,15 +995,15 @@ func _refresh_summary_chips(journey_count: int, journey_total: int, next_label: 
 		return
 	_clear_children(_summary_chips)
 	var journey_value := "%d/%d" % [journey_count, journey_total]
-	var journey_note := "首局目标完成" if journey_count >= journey_total else ("下个：%s" % next_label if next_label != "" else "继续探索")
-	var relic_value := "发现 %d  修复 %d" % [discovered, restored]
-	var relic_note := "最佳 %d%%" % best_percent if best_percent > 0 else "等待第一处记录"
-	var restore_value := "%s %d%%" % [target_label, target_percent] if target_label != "" and target_percent >= 0 else "暂无目标"
-	var restore_note := "右键建造修复" if target_label != "" and target_percent >= 0 else "跟随线索发现遗迹"
-	_summary_chips.add_child(_summary_chip("旅程", journey_value, journey_note, Color(1.0, 0.92, 0.48, 0.92)))
-	_summary_chips.add_child(_summary_chip("遗迹", relic_value, relic_note, Color(0.66, 0.90, 1.0, 0.92)))
-	_summary_chips.add_child(_summary_chip("修复", restore_value, restore_note, Color(0.66, 1.0, 0.74, 0.92)))
-	_summary_chips.add_child(_summary_chip("归途", home_text, save_status, Color(0.86, 0.94, 1.0, 0.86)))
+	var journey_note: String = _loc().t("PAUSE_SUMMARY_CHIP_JOURNEY_DONE") if journey_count >= journey_total else (_loc().t("PAUSE_SUMMARY_CHIP_JOURNEY_NEXT") % next_label if next_label != "" else _loc().t("PAUSE_SUMMARY_CHIP_JOURNEY_EXPLORE"))
+	var relic_value: String = _loc().t("PAUSE_SUMMARY_CHIP_RELIC_VALUE") % [discovered, restored]
+	var relic_note: String = _loc().t("PAUSE_SUMMARY_CHIP_RELIC_BEST") % best_percent if best_percent > 0 else _loc().t("PAUSE_SUMMARY_CHIP_RELIC_WAIT")
+	var restore_value: String = _loc().t("PAUSE_SUMMARY_CHIP_REPAIR_VALUE") % [target_label, target_percent] if target_label != "" and target_percent >= 0 else _loc().t("PAUSE_SUMMARY_CHIP_REPAIR_NONE")
+	var restore_note: String = _loc().t("PAUSE_SUMMARY_CHIP_REPAIR_NOTE") if target_label != "" and target_percent >= 0 else _loc().t("PAUSE_SUMMARY_CHIP_REPAIR_CLUE")
+	_summary_chips.add_child(_summary_chip(_loc().t("PAUSE_SUMMARY_CHIP_JOURNEY"), journey_value, journey_note, Color(1.0, 0.92, 0.48, 0.92)))
+	_summary_chips.add_child(_summary_chip(_loc().t("PAUSE_SUMMARY_CHIP_RELIC"), relic_value, relic_note, Color(0.66, 0.90, 1.0, 0.92)))
+	_summary_chips.add_child(_summary_chip(_loc().t("PAUSE_SUMMARY_CHIP_REPAIR"), restore_value, restore_note, Color(0.66, 1.0, 0.74, 0.92)))
+	_summary_chips.add_child(_summary_chip(_loc().t("PAUSE_SUMMARY_CHIP_HOME"), home_text, save_status, Color(0.86, 0.94, 1.0, 0.86)))
 
 func _refresh_mode() -> void:
 	if _panel != null:
