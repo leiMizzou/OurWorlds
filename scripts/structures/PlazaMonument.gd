@@ -6,7 +6,7 @@ const PILLAR_H := 10
 const PATH_LEN := 30
 const LAMP_SPACING := 6
 
-static func stamp(chunk, _lib, anchor: Vector3i) -> void:
+static func stamp(chunk, anchor: Vector3i) -> void:
 	var cwx: int = chunk.cx * Chunk.SX
 	var cwz: int = chunk.cz * Chunk.SZ
 	var wy: int = anchor.y

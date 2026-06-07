@@ -5,6 +5,7 @@ extends SceneTree
 const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
 
 var _f := 0
+var _ready_f := -1
 var _main = null
 var failed := 0
 var _path := "user://tests/save_status/world.json"
@@ -27,30 +28,43 @@ func _process(_delta: float) -> bool:
 		_clean_save()
 		_main = load("res://scenes/Main.tscn").instantiate()
 		root.add_child(_main)
-	elif _f == 24:
-		check(_main.hud._status_label.text.contains("已保存"), "启动后 HUD 显示已保存")
+	elif _ready_f < 0:
+		if _f > 600:
+			printerr("  FAIL 世界在 600 帧内未就绪")
+			failed += 1
+			_ready_f = _f
+		elif _main.world != null and _main.hud != null:
+			# 世界就绪后先强制保存，清除初始化期间（如地标发现）产生的 dirty 标记，
+			# 建立一个干净的 "已保存" 基线再开始测试 HUD 状态转换。
+			_main.world.save_world(true)
+			_main._sync_hud_save_state()
+			_ready_f = _f
+	elif _f == _ready_f + 2:
+		check(_main.hud._status_label.text.contains("已保存"), "基线保存后 HUD 显示已保存")
 		var p = _main.player.global_position
 		var x := int(floor(p.x)) + 3
 		var z := int(floor(p.z))
 		var y: int = _main.world.surface_y(x, z) + 1
-		check(_main.world.request_edit(x, y, z, BlockLibrary.LANTERN), "编辑世界产生未保存改动")
-	elif _f == 28:
+		var before: int = _main.world.get_block(x, y, z)
+		var edit_id := BlockLibrary.GLASS if before != BlockLibrary.GLASS else BlockLibrary.BRICK
+		check(_main.world.request_edit(x, y, z, edit_id), "编辑世界产生未保存改动")
+	elif _f == _ready_f + 6:
 		check(_main.world.has_unsaved_changes(), "世界记录未保存改动")
 		check(_main.hud._status_label.text.contains("有改动"), "编辑后 HUD 显示有改动")
 		_main.set_game_paused(true)
 		check(_main.pause_menu.visible, "保存前暂停菜单可见")
 		check(_main.pause_menu._location_summary_label.text.contains("有改动"), "保存前暂停菜单摘要显示有改动")
 		_main._save_from_menu()
-	elif _f == 34:
+	elif _f == _ready_f + 12:
 		check(not _main.world.has_unsaved_changes(), "保存后世界不再有未保存改动")
 		check(_main.hud._status_label.text.contains("已保存"), "保存后 HUD 回到已保存")
 		check(_main.pause_menu._location_summary_label.text.contains("已保存"), "保存后暂停菜单摘要回到已保存")
 		_main.set_game_paused(false)
 		_main.world.save_path = ""
 		_main._sync_hud_save_state()
-	elif _f == 38:
+	elif _f == _ready_f + 16:
 		check(_main.hud._status_label.text.contains("本地会话"), "禁用存档时 HUD 显示本地会话")
-	elif _f >= 64:
+	elif _f >= _ready_f + 40:
 		_clean_save()
 		if failed == 0:
 			print("✅ ALL SAVE STATUS HUD TESTS PASSED")

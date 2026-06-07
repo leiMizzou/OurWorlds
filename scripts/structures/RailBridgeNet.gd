@@ -2,7 +2,8 @@ extends RefCounted
 const Chunk = preload("res://scripts/Chunk.gd")
 const BL = preload("res://scripts/BlockLibrary.gd")
 const HALF := 256
-const SPAN := 171
+const SECTORS := 3
+const SPAN := 512 / SECTORS   # = 170，与 IslandGenerator 一致
 
 static func _sector_center(cell: int) -> Vector2i:
 	var col := cell % 3
@@ -11,7 +12,7 @@ static func _sector_center(cell: int) -> Vector2i:
 
 const LINKS := [[0,1],[1,2],[3,4],[4,5],[6,7],[7,8],[0,3],[3,6],[1,4],[4,7],[2,5],[5,8]]
 
-static func stamp(chunk, _lib, anchor: Vector3i) -> void:
+static func stamp(chunk, anchor: Vector3i) -> void:
 	var cwx: int = chunk.cx * Chunk.SX
 	var cwz: int = chunk.cz * Chunk.SZ
 	for link in LINKS:

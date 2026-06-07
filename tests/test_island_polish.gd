@@ -29,7 +29,7 @@ func _initialize() -> void:
 		for lx in range(Chunk.SX):
 			for lz in range(Chunk.SZ):
 				chunk.set_block(lx, 40, lz, BlockLibrary.GRASS)
-		IslandDecorator.stamp(chunk, null, Vector3i(0, 40, 0), t, 2026)
+		IslandDecorator.stamp(chunk, Vector3i(0, 40, 0), t, 2026)
 		var count := 0
 		for i in chunk.blocks.size():
 			var bid: int = chunk.blocks[i]
@@ -38,7 +38,7 @@ func _initialize() -> void:
 
 	# 2) Waterfall stamps WATER + MOSSY_STONE
 	var wc := Chunk.new(0, 0)
-	Waterfall.stamp(wc, null, Vector3i(0, 40, 0))
+	Waterfall.stamp(wc, Vector3i(0, 40, 0))
 	check(has_block_type(wc, BlockLibrary.WATER), "Waterfall has WATER")
 	check(has_block_type(wc, BlockLibrary.MOSSY_STONE), "Waterfall has MOSSY_STONE")
 

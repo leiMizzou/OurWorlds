@@ -5,7 +5,7 @@ const BASE_R := 8
 const BASE_H := 6
 const DOME_R := 7
 
-static func stamp(chunk, _lib, anchor: Vector3i) -> void:
+static func stamp(chunk, anchor: Vector3i) -> void:
 	var cwx: int = chunk.cx * Chunk.SX
 	var cwz: int = chunk.cz * Chunk.SZ
 	var sx: int = maxi(anchor.x - BASE_R, cwx)

@@ -7,7 +7,7 @@ const WIDTH := 5        # 水帘宽度
 const HEIGHT := 12      # 瀑布落差
 const CLIFF_DEPTH := 3  # 岩壁厚度
 
-static func stamp(chunk, _lib, anchor: Vector3i) -> void:
+static func stamp(chunk, anchor: Vector3i) -> void:
 	var cwx: int = chunk.cx * Chunk.SX
 	var cwz: int = chunk.cz * Chunk.SZ
 	var half_w: int = WIDTH / 2

@@ -4,7 +4,7 @@ const BL = preload("res://scripts/BlockLibrary.gd")
 const HALF_BASE := 12
 const LAYERS := 12
 
-static func stamp(chunk, _lib, anchor: Vector3i) -> void:
+static func stamp(chunk, anchor: Vector3i) -> void:
 	var cwx: int = chunk.cx * Chunk.SX
 	var cwz: int = chunk.cz * Chunk.SZ
 	for layer in range(LAYERS):

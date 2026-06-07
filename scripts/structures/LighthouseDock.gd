@@ -5,7 +5,7 @@ const TOWER_R := 3
 const TOWER_H := 18
 const DOCK_LEN := 16
 
-static func stamp(chunk, _lib, anchor: Vector3i) -> void:
+static func stamp(chunk, anchor: Vector3i) -> void:
 	var cwx: int = chunk.cx * Chunk.SX
 	var cwz: int = chunk.cz * Chunk.SZ
 	var sx: int = maxi(anchor.x - TOWER_R, cwx)
@@ -59,4 +59,4 @@ static func stamp(chunk, _lib, anchor: Vector3i) -> void:
 				var lz: int = wz - cwz
 				if lx >= 0 and lx < Chunk.SX and lz >= 0 and lz < Chunk.SZ:
 					if wy >= 0 and wy < Chunk.SY: chunk.set_block(lx, wy, lz, BL.LOG)
-					if wy + 1 < Chunk.SY: chunk.set_block(lx, wy + 1, lz, BL.LANTERN)
+					if wy + 1 >= 0 and wy + 1 < Chunk.SY: chunk.set_block(lx, wy + 1, lz, BL.LANTERN)

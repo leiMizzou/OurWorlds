@@ -8,7 +8,7 @@ const BL = preload("res://scripts/BlockLibrary.gd")
 const SCATTER_GRID := 6       # 每 6 格一个散布格
 const SCATTER_RANGE := 60     # 散布区半径（从 anchor 起）
 
-static func stamp(chunk, _lib, anchor: Vector3i, theme: int, world_seed: int) -> void:
+static func stamp(chunk, anchor: Vector3i, theme: int, world_seed: int) -> void:
 	var cwx: int = chunk.cx * Chunk.SX
 	var cwz: int = chunk.cz * Chunk.SZ
 	# 扫描散布区中属于本 chunk 的列
@@ -144,8 +144,8 @@ static func _place_cactus(chunk, lx: int, base_y: int, lz: int, h: int) -> void:
 static func _place_rock_cluster(chunk, lx: int, base_y: int, lz: int, h: int) -> void:
 	var rock_type: int = BL.BASALT if (h >> 10) % 2 == 0 else BL.STONE
 	_place_block(chunk, lx, base_y, lz, rock_type)
-	if (h >> 11) % 3 > 0 and base_y + 1 < Chunk.SY:
-		chunk.set_block(lx, base_y + 1, lz, rock_type)
+	if (h >> 11) % 3 > 0:
+		_place_block(chunk, lx, base_y + 1, lz, rock_type)
 
 static func _place_lamp_post(chunk, lx: int, base_y: int, lz: int) -> void:
 	for dy in range(3):

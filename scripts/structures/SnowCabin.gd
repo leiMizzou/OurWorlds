@@ -6,7 +6,7 @@ const D := 6
 const H := 4
 const ROOF_H := 3
 
-static func stamp(chunk, _lib, anchor: Vector3i) -> void:
+static func stamp(chunk, anchor: Vector3i) -> void:
 	var cwx: int = chunk.cx * Chunk.SX
 	var cwz: int = chunk.cz * Chunk.SZ
 	var bx := anchor.x - W / 2

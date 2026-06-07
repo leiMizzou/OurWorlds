@@ -3,7 +3,7 @@ const Chunk = preload("res://scripts/Chunk.gd")
 const BL = preload("res://scripts/BlockLibrary.gd")
 const HOUSES := [[-14,-10,7,6,4,3],[6,-12,6,5,4,2],[-12,8,6,6,4,3],[8,6,7,5,4,2],[0,-2,8,7,5,3]]
 
-static func stamp(chunk, _lib, anchor: Vector3i) -> void:
+static func stamp(chunk, anchor: Vector3i) -> void:
 	var cwx: int = chunk.cx * Chunk.SX
 	var cwz: int = chunk.cz * Chunk.SZ
 	var wy: int = anchor.y
