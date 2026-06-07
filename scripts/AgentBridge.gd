@@ -86,7 +86,7 @@ func _ready() -> void:
 		push_warning("AgentBridge 监听失败 127.0.0.1:%d（err=%d）" % [_port, err])
 		_server = null
 		return
-	print("AgentBridge 监听 127.0.0.1:%d" % _port)
+	print_verbose("AgentBridge 监听 127.0.0.1:%d" % _port)
 
 func _exit_tree() -> void:
 	for peer in _peers:

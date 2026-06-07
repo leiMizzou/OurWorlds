@@ -41,6 +41,8 @@ var _fullscreen_check: CheckBox
 var _resolution_option: OptionButton
 var _weather_check: CheckBox
 var _controls_overlay: Control      # “操作说明”浮层（覆盖在面板之上）
+const VIEW_RADIUS_MIN := 2
+const VIEW_RADIUS_MAX := 6
 var _view_radius := 4
 var _volume := 0.65
 var _sensitivity := 1.0
@@ -571,12 +573,12 @@ func _persist_display() -> void:
 	GameSettings.save_settings(settings)
 
 func _decrease_view_radius() -> void:
-	_view_radius = clampi(_view_radius - 1, 2, 6)
+	_view_radius = clampi(_view_radius - 1, VIEW_RADIUS_MIN, VIEW_RADIUS_MAX)
 	_refresh_labels()
 	view_radius_changed.emit(_view_radius)
 
 func _increase_view_radius() -> void:
-	_view_radius = clampi(_view_radius + 1, 2, 6)
+	_view_radius = clampi(_view_radius + 1, VIEW_RADIUS_MIN, VIEW_RADIUS_MAX)
 	_refresh_labels()
 	view_radius_changed.emit(_view_radius)
 

@@ -169,7 +169,7 @@ func _enter_world(seed_value: int, spawn_override) -> void:
 	var spawn: Vector3 = spawn_override if spawn_override is Vector3 else _find_spawn_position()
 	var t0 := Time.get_ticks_msec()
 	world.prime(world.chunk_of(int(spawn.x), int(spawn.z)), 1)
-	print("脚下区域就绪 ", Time.get_ticks_msec() - t0, " ms（其余边走边加载）")
+	print_verbose("脚下区域就绪 %d ms（其余边走边加载）" % (Time.get_ticks_msec() - t0))
 
 	player = Player.new()
 	player.name = "Player"
@@ -426,7 +426,7 @@ func _start_dedicated_server() -> void:
 	net_manager.set_authority_data(data, _current_seed, spawn)
 	net_manager.world_save_path = save_path        # 世界重启不丢：载入已有存档 + 定期自动存盘
 	if net_manager.load_world(net_manager.world_save_path):
-		print("已载入服务器世界存档：", net_manager.world_save_path)
+		print_verbose("已载入服务器世界存档：%s" % net_manager.world_save_path)
 	add_child(net_manager)
 	net_manager.start_server(_net_port())
 
@@ -460,7 +460,7 @@ func _start_client_and_wait() -> void:
 	net_manager.avatar_factory = _make_remote_avatar
 	net_manager.welcomed.connect(_on_welcomed)
 	add_child(net_manager)
-	print("连接服务器中，等待入场 ...")   # 此刻 title_screen 还没建（在 _enter_world 里建），别调 set_title_active
+	print_verbose("连接服务器中，等待入场 ...")   # 此刻 title_screen 还没建（在 _enter_world 里建），别调 set_title_active
 	net_manager.start_client(_connect_url())
 
 func _on_welcomed(payload: Dictionary) -> void:

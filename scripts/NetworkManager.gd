@@ -290,7 +290,7 @@ func start_server(port: int) -> int:
 	multiplayer.multiplayer_peer = peer
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
-	print("OurWorlds 联机服务器监听 :%d（权威，无渲染）" % port)
+	print_verbose("OurWorlds 联机服务器监听 :%d（权威，无渲染）" % port)
 	return OK
 
 func start_client(url: String) -> int:
@@ -303,7 +303,7 @@ func start_client(url: String) -> int:
 	multiplayer.multiplayer_peer = peer
 	multiplayer.connected_to_server.connect(_on_connected_to_server)
 	multiplayer.server_disconnected.connect(_on_server_disconnected)
-	print("OurWorlds 客户端连接中 %s ..." % url)
+	print_verbose("OurWorlds 客户端连接中 %s ..." % url)
 	return OK
 
 func start_host(port: int) -> int:
@@ -331,10 +331,10 @@ func _on_peer_disconnected(id: int) -> void:
 func _on_connected_to_server() -> void:
 	# 连上后向服务器报名（带本机玩家名）；服务器回 _rpc_welcome。
 	_rpc_hello.rpc_id(1, _local_player_name())
-	print("已连上服务器，等待入场 ...")
+	print_verbose("已连上服务器，等待入场 ...")
 
 func _on_server_disconnected() -> void:
-	print("与服务器断开。")
+	push_warning("与服务器断开。")
 
 func _local_player_name() -> String:
 	return "玩家"   # M1 先用固定名；连接界面任务可让玩家填名
