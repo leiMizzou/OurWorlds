@@ -473,6 +473,7 @@ func _start_host_after_enter() -> void:
 	world.net = net_manager
 	add_child(net_manager)
 	net_manager.start_host(_net_port())
+	_wire_net_chat_identity(net_manager.self_eid())
 
 func _start_client_and_wait() -> void:
 	net_manager = NetworkManager.new()
@@ -494,8 +495,22 @@ func _on_welcomed(payload: Dictionary) -> void:
 	world.net = net_manager
 	net_manager.player = player
 	net_manager.chat_hub = chat_hub
+	_wire_net_chat_identity(net_manager.self_eid())
 	if payload.has("deltas"):
 		world.load_deltas_from_net(payload["deltas"])
+
+# 联机时把本地玩家的聊天身份切成其网络 eid：以该 eid 注册为"自己"，并把发言交给
+# NetworkManager 走网络中继。这样服务器广播回来的大厅消息里"自己发的"能正确识别为本人。
+# 单机/纯服务器（无本地玩家、eid 为空）不接线，保持原行为。
+func _wire_net_chat_identity(eid: String) -> void:
+	if eid == "" or chat_panel == null or chat_hub == null or net_manager == null:
+		return
+	if eid != "player":
+		chat_hub.unregister("player")        # 移除单机默认占位"player"，避免与网络 eid 并存成幽灵
+	chat_panel.player_id = eid
+	chat_hub.register(eid, _t("CHAT_SELF"), "human")
+	chat_panel.send_func = func(to: String, text: String) -> void:
+		net_manager.local_say(to, text)
 
 func _initial_seed() -> int:
 	if OS.has_environment("VC_SEED"):

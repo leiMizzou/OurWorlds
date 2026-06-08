@@ -11,6 +11,8 @@ signal visit_requested(target_id: String)   # 在线列表点"前往" → Main �
 var chat_hub
 var player_id := "player"
 var current_channel := ""            # "" = 公共大厅；否则 = 私聊对象 entity id
+var send_func: Callable = Callable() # 联机时 Main 注入：把发言交给 NetworkManager 走网络中继；
+                                     # 未设（单机/测试）则退回直接 post 进本地 chat_hub
 
 var _root: Control
 var _panel: PanelContainer
@@ -100,7 +102,12 @@ func submit_text(text: String) -> void:
 	text = text.strip_edges()
 	if text == "" or chat_hub == null:
 		return
-	chat_hub.post(player_id, current_channel, text)
+	# 联机：交给 NetworkManager 走网络中继（服务器权威 post + 广播，本端经回显显示）。
+	# 单机/测试：无 send_func，直接 post 进本地 chat_hub（保持原行为）。
+	if send_func.is_valid():
+		send_func.call(current_channel, text)
+	else:
+		chat_hub.post(player_id, current_channel, text)
 
 # ---------- 内部 ----------
 

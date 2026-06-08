@@ -32,6 +32,7 @@ var _eid_counter := 0
 var _vpeer_counter := 0            # 虚拟 peer 计数器（负 id 占位）
 var _self_eid := ""                # 本端自己的 eid（CLIENT/HOST）；快照里跳过它
 var _avatars := {}                 # eid -> RemoteAvatar 节点（CLIENT）
+var _net_presence := {}            # 客户端：从快照登记进 chat_hub 在线列表的 eid 集合（掉出快照即注销）
 var report_node: Node3D = null     # 客户端上报哪个节点的位置：默认玩家；agent-client 设成 agent 小人，
                                    # 这样服务器按 agent 实际位置校验编辑、别人也看见 agent 走动
 
@@ -98,6 +99,22 @@ func peer_eids() -> Array:
 # 服务器权威：校验一条编辑请求，合法则写入 WorldData 并返回广播载荷。
 # now<0 时用真实时钟（运行时）；测试可显式传 now 以测频率限制。
 func authorize_edit(peer_id: int, wx: int, wy: int, wz: int, id: int, now: float = -1.0) -> Dictionary:
+	var pre := _validate_edit_reach(peer_id, wx, wy, wz)
+	if not bool(pre.get("ok", false)):
+		return pre
+	if not _accept_rate(peer_id, now):
+		return {"ok": false, "reason": "rate limited"}
+	return _apply_authorized_edit(wx, wy, wz, id)
+
+# 与 authorize_edit 相同的 y/reach/no-change 校验，但不消耗频率窗口。
+# 批量模板/蓝图会先按"一次请求"限流，再逐格调用这里，避免大模板被 96 格截断。
+func _authorize_edit_without_rate(peer_id: int, wx: int, wy: int, wz: int, id: int) -> Dictionary:
+	var pre := _validate_edit_reach(peer_id, wx, wy, wz)
+	if not bool(pre.get("ok", false)):
+		return pre
+	return _apply_authorized_edit(wx, wy, wz, id)
+
+func _validate_edit_reach(peer_id: int, wx: int, wy: int, wz: int) -> Dictionary:
 	if not _peers.has(peer_id):
 		return {"ok": false, "reason": "unknown peer"}
 	if wy < 0 or wy >= Chunk.SY:
@@ -106,8 +123,9 @@ func authorize_edit(peer_id: int, wx: int, wy: int, wz: int, id: int, now: float
 	var d := Vector3(float(wx) + 0.5, float(wy) + 0.5, float(wz) + 0.5) - ppos
 	if absf(d.x) > PLAYER_REACH + PLAYER_REACH_MARGIN or absf(d.y) > PLAYER_REACH + PLAYER_REACH_MARGIN or absf(d.z) > PLAYER_REACH + PLAYER_REACH_MARGIN:
 		return {"ok": false, "reason": "out of reach"}
-	if not _accept_rate(peer_id, now):
-		return {"ok": false, "reason": "rate limited"}
+	return {"ok": true}
+
+func _apply_authorized_edit(wx: int, wy: int, wz: int, id: int) -> Dictionary:
 	var affected: Array = _data.apply_edit_local(wx, wy, wz, id)
 	if affected.is_empty():
 		return {"ok": false, "reason": "no change"}
@@ -201,7 +219,7 @@ func build_player_snapshot() -> Array:
 	for pid in _peers:
 		var p: Dictionary = _peers[pid]
 		var pos: Vector3 = p["pos"]
-		out.append({"eid": p["eid"], "pos": [pos.x, pos.y, pos.z], "yaw": p["yaw"]})
+		out.append({"eid": p["eid"], "name": p["name"], "pos": [pos.x, pos.y, pos.z], "yaw": p["yaw"]})
 	return out
 
 # 客户端：按快照增量更新 avatar —— 缺的生成、有的更新目标、走了的移除。跳过本端自己。
@@ -213,6 +231,12 @@ func apply_player_snapshot(snapshot: Array) -> void:
 		if eid == "" or eid == _self_eid:
 			continue
 		seen[eid] = true
+		# 客户端：用快照里的 name 同步 chat_hub 在线列表（聊天 presence）。
+		# 服务器自己维护 _peers/chat_hub，无需据快照重建（且会误注销自己），故仅客户端做。
+		if chat_hub != null and is_client() and not _net_presence.has(eid):
+			var kind := "agent" if eid.begins_with("agent-") else "human"
+			chat_hub.register(eid, str(e.get("name", eid)), kind)
+			_net_presence[eid] = true
 		var ap: Array = e.get("pos", [0, 0, 0])
 		var pos := Vector3(float(ap[0]), float(ap[1]), float(ap[2]))
 		var yaw := float(e.get("yaw", 0.0))
@@ -226,13 +250,19 @@ func apply_player_snapshot(snapshot: Array) -> void:
 			av.set_net_target(pos, yaw)
 		else:
 			av.position = pos
-	# 移除快照里不再出现的
+	# 移除快照里不再出现的 avatar
 	for eid in _avatars.keys():
 		if not seen.has(eid):
 			var node: Node3D = _avatars[eid]
 			if is_instance_valid(node):
 				node.queue_free()
 			_avatars.erase(eid)
+	# 注销掉出快照的 presence（仅客户端、仅我们据快照登记过的；绝不动本端 self id）。
+	if chat_hub != null and is_client():
+		for eid in _net_presence.keys():
+			if not seen.has(eid) and eid != _self_eid:
+				chat_hub.unregister(eid)
+				_net_presence.erase(eid)
 
 func avatar_count() -> int:
 	return _avatars.size()
@@ -282,6 +312,11 @@ func is_server() -> bool:
 
 func is_client() -> bool:
 	return mode == Mode.CLIENT
+
+# 本端自己的网络 eid（CLIENT/HOST）。Main 据此把本地玩家的聊天身份设成网络 eid，
+# 使大厅回显渲染为"自己"。SERVER 无本地玩家时为空字符串。
+func self_eid() -> String:
+	return _self_eid
 
 func start_server(port: int) -> int:
 	if mode == Mode.OFFLINE:
@@ -379,12 +414,31 @@ func _rpc_update_self(px: float, py: float, pz: float, yaw: float) -> void:
 		return
 	set_peer_transform(multiplayer.get_remote_sender_id(), Vector3(px, py, pz), yaw)
 
+# 客户端 -> 服务器：发一条聊天（to_eid="" 为大厅，否则私聊对象 eid/名）。
+# 服务器据发送者 peer 反查其 eid，再走统一权威路径（写 history + 广播）。
+@rpc("any_peer", "reliable")
+func _rpc_say(to_eid: String, text: String) -> void:
+	if not is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if not _peers.has(sender):
+		return
+	_server_post_chat(str(_peers[sender]["eid"]), to_eid, text)
+
 # ---- RPC：服务器->客户端 ----
 @rpc("authority", "reliable")
 func _rpc_welcome(payload: Dictionary) -> void:
 	_self_eid = str(payload.get("your_eid", ""))
 	apply_welcome(payload)
 	welcomed.emit(payload)        # Main 在 CLIENT 模式下接它来建世界/玩家
+
+# 服务器 -> 客户端：把一条聊天镜像进本地 chat_hub（ChatPanel 经 message_posted 显示）。
+# 不用 call_local：服务器已在 _server_post_chat 里 post 过，HOST 不能再重复 post。
+@rpc("authority", "reliable")
+func _rpc_recv_chat(from_eid: String, to_eid: String, text: String, _t: int) -> void:
+	if chat_hub == null:
+		return
+	chat_hub.post(from_eid, to_eid, text)
 
 @rpc("authority", "call_local", "reliable")
 func _rpc_apply_edit(wx: int, wy: int, wz: int, id: int) -> void:
@@ -404,6 +458,45 @@ func submit_edit(wx: int, wy: int, wz: int, id: int) -> void:
 
 func broadcast_edit(wx: int, wy: int, wz: int, id: int) -> void:
 	_rpc_apply_edit.rpc(wx, wy, wz, id)             # HOST：本地已应用，广播给客户端
+
+# ---- 聊天出入口（ChatPanel 经 Main 调 local_say；服务器走 _server_post_chat 权威广播）----
+
+# 反查某 eid 对应的真实 peer_id（正数=真实连接）；找不到或为虚拟 agent（负 id）返回 0。
+func _pid_for_eid(eid: String) -> int:
+	for pid in _peers:
+		if pid > 0 and str(_peers[pid]["eid"]) == eid:
+			return pid
+	return 0
+
+# 服务器权威：写进 chat_hub（agent 服务端直读这份 history），并按可见性广播给真实客户端。
+# 大厅 -> 全体客户端（含发送者本人，用于回显）；私聊 -> 仅收件人 + 发送者。
+# agent（负 id 虚拟 peer）不经 RPC 收发——它们服务端直读 chat_hub。
+func _server_post_chat(from_eid: String, to_eid: String, text: String) -> void:
+	if not is_server() or chat_hub == null:
+		return
+	var resolved: String = str(chat_hub.resolve(to_eid)) if to_eid != "" else ""
+	chat_hub.post(from_eid, resolved, text)                     # 权威 history（agent 直读这份）
+	var t := int(Time.get_unix_time_from_system())
+	if not (multiplayer != null and multiplayer.has_multiplayer_peer()):
+		return
+	if resolved == "":                                          # 大厅 -> 全体客户端（含发送者回显）
+		_rpc_recv_chat.rpc(from_eid, "", text, t)
+	else:                                                       # 私聊 -> 收件人 + 发送者（仅真实/正 id peer）
+		var rpid := _pid_for_eid(resolved)
+		var spid := _pid_for_eid(from_eid)
+		if rpid > 0:
+			_rpc_recv_chat.rpc_id(rpid, from_eid, resolved, text, t)
+		if spid > 0 and spid != rpid:
+			_rpc_recv_chat.rpc_id(spid, from_eid, resolved, text, t)
+
+# 本地发送（ChatPanel.send_func 调）：客户端转发给服务器；HOST/SERVER 本地走权威路径。
+func local_say(to_eid: String, text: String) -> void:
+	if text.strip_edges() == "":
+		return
+	if is_client():
+		_rpc_say.rpc_id(1, to_eid, text)
+	elif is_server():
+		_server_post_chat(_self_eid, to_eid, text)
 
 # ---- 帧循环：服务器广播玩家快照；客户端上报自身位置（~15Hz）----
 func _process(delta: float) -> void:
@@ -457,8 +550,9 @@ func update_virtual_peer(eid: String, pos: Vector3, yaw: float) -> void:
 
 func virtual_say(eid: String, text: String, to: String = "") -> void:
 	if chat_hub == null or _vpid_for(eid) == 0: return
-	if to == "": chat_hub.post(eid, "", text)
-	else: chat_hub.post(eid, chat_hub.resolve(to), text)
+	# 走统一权威路径：写进 chat_hub（agent 直读）的同时，也广播给人类客户端，
+	# 这样 agent 发言别的玩家也看得见（之前只 post 进 hub，联机里人类收不到）。
+	_server_post_chat(eid, to, text)
 
 func remove_virtual_peer(eid: String) -> void:
 	var pid := _vpid_for(eid)
@@ -475,6 +569,35 @@ func apply_virtual_edit_at(eid: String, wx: int, wy: int, wz: int, id: int, now:
 	if is_server() and multiplayer != null and multiplayer.has_multiplayer_peer():
 		_rpc_apply_edit.rpc(wx, wy, wz, id)
 	return true
+
+func apply_virtual_edits(eid: String, edits: Array) -> int:
+	return apply_virtual_edits_at(eid, edits, -1.0)
+
+# 批量编辑按"一次 agent 请求"限流，逐格仍走 y/reach/no-change 校验。
+# 这让 cabin/blueprint 这类 >EDIT_RATE_MAX 的模板能完整落地，同时保留服务端权威约束。
+func apply_virtual_edits_at(eid: String, edits: Array, now: float) -> int:
+	var pid := _vpid_for(eid)
+	if pid == 0:
+		return 0
+	if edits.is_empty():
+		return 0
+	if not _accept_rate(pid, now):
+		return 0
+	var changed := 0
+	for raw in edits:
+		if typeof(raw) != TYPE_DICTIONARY:
+			continue
+		var e: Dictionary = raw
+		if not e.has("pos") or not e.has("id"):
+			continue
+		var pos: Vector3i = e["pos"]
+		var r := _authorize_edit_without_rate(pid, pos.x, pos.y, pos.z, int(e["id"]))
+		if not bool(r.get("ok", false)):
+			continue
+		changed += 1
+		if is_server() and multiplayer != null and multiplayer.has_multiplayer_peer():
+			_rpc_apply_edit.rpc(pos.x, pos.y, pos.z, int(e["id"]))
+	return changed
 
 func _exit_tree() -> void:
 	# 服务器优雅退出时存一次盘（定期自动存盘兜底强杀丢的 ≤30s）
