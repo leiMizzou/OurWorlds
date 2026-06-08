@@ -31,3 +31,4 @@ agent_memory.json
 __pycache__/
 *.pyc
 .playwright-mcp/
+web/portal/ourworlds-agent.mjs
