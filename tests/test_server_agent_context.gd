@@ -64,6 +64,11 @@ func _initialize() -> void:
 	check(bool(bd.get("ok", false)) and int((bd["result"] as Dictionary).get("changed", 0)) > 0, "server build 放置方块")
 	check(int(data.get_block(tbx, tby, tbz)) == BlockLibrary.MOONSTONE_LAMP, "build campfire 中心 == MOONSTONE_LAMP")
 
+	var cbx := 70; var cbz := 70; var cby := data.surface_y(cbx, cbz) + 1
+	AgentToolCore.handle("goto", {"x": cbx, "z": cbz}, ctx)
+	var cabin: Dictionary = AgentToolCore.handle("build", {"template": "cabin", "x": cbx, "y": cby, "z": cbz}, ctx)
+	check(bool(cabin.get("ok", false)) and int((cabin["result"] as Dictionary).get("changed", 0)) > NetworkManager.EDIT_RATE_MAX, "server build 大模板不会被逐格限流截断")
+
 	# ---- get_block：读真实世界，含 alias + solid ----
 	var gb: Dictionary = AgentToolCore.handle("get_block", {"x": bx, "y": by, "z": bz}, ctx)
 	check(str((gb["result"] as Dictionary).get("block", "")) == "stone", "get_block 读到 stone")

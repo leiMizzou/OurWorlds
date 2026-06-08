@@ -43,6 +43,17 @@ func _initialize() -> void:
 		rl.apply_virtual_edit_at(re, 0, sy, 0, (i % 2) + 1, 1000.0)
 	check(not rl.apply_virtual_edit_at(re, 0, sy, 0, 3, 1000.0), "agent over-rate rejected")
 
+	var bulk := NetworkManager.new(); bulk.mode = NetworkManager.Mode.SERVER
+	var bd := WorldData.new(10); bulk.set_authority_data(bd, 10, Vector3.ZERO)
+	var be := bulk.register_virtual_peer("BulkBuilder")
+	bulk.update_virtual_peer(be, Vector3(0.5, 90.5, 0.5), 0.0)
+	var edits := []
+	for z in range(-5, 6):
+		for x in range(-5, 6):
+			edits.append({"pos": Vector3i(x, 90, z), "id": BlockLibrary.STONE})
+	var bulk_changed := bulk.apply_virtual_edits_at(be, edits, 2000.0)
+	check(bulk_changed == edits.size() and bulk_changed > NetworkManager.EDIT_RATE_MAX, "batch virtual edit applies > rate window as one request")
+
 	nm.remove_virtual_peer(ae)
 	var gone := true
 	for raw in nm.build_player_snapshot():

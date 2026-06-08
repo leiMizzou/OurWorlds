@@ -309,8 +309,10 @@ class ServerAgentContext extends RefCounted:
 	func world_ready() -> bool:
 		return data != null
 
-	# 编辑走服务器权威：逐条 apply_virtual_edit（含 reach / 频率 / y 范围校验），返回被接受的条数。
+	# 编辑走服务器权威：一次 tool-call 按批量请求限流；每格仍校验 reach / y / no-change。
 	func apply_edits(edits: Array) -> int:
+		if nm.has_method("apply_virtual_edits"):
+			return int(nm.apply_virtual_edits(eid, edits))
 		var changed := 0
 		for raw in edits:
 			var e: Dictionary = raw
