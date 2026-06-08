@@ -8,12 +8,23 @@ set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GODOT="${GODOT:-godot}"; PORT="${OW_PORT:-8975}"; AGENT_PORT="${OW_AGENT_PORT:-8970}"
 SRV_LOG="$(mktemp)"; CLI_LOG="$(mktemp)"
+CLI=""
 
-OW_SERVER=1 OW_PORT="$PORT" VC_SEED=4242 "$GODOT" --headless --path "$HERE" > "$SRV_LOG" 2>&1 &
+OW_SERVER=1 OW_PORT="$PORT" VC_SEED=4242 "$GODOT" --verbose --headless --path "$HERE" > "$SRV_LOG" 2>&1 &
 SRV=$!
-OW_CONNECT="ws://127.0.0.1:$PORT" OW_AGENT_PORT="$AGENT_PORT" VC_NO_SAVE=1 "$GODOT" --headless --path "$HERE" > "$CLI_LOG" 2>&1 &
+trap 'kill "$SRV" ${CLI:-} 2>/dev/null; wait "$SRV" ${CLI:-} 2>/dev/null; rm -f "$SRV_LOG" "$CLI_LOG"' EXIT
+
+# 先等服务器监听，再启动 agent-client，避免客户端启动早于 WebSocket 服务导致偶发卡在连接中。
+srv_ready=0
+for _i in $(seq 1 80); do
+	kill -0 "$SRV" 2>/dev/null || break
+	grep -q "联机服务器监听" "$SRV_LOG" && { srv_ready=1; break; }
+	sleep 0.25
+done
+[ "$srv_ready" = 1 ] || { echo "❌ 服务器未监听"; sed 's/^/  srv| /' "$SRV_LOG" | tail -8; exit 1; }
+
+OW_CONNECT="ws://127.0.0.1:$PORT" OW_AGENT_PORT="$AGENT_PORT" VC_NO_SAVE=1 "$GODOT" --verbose --headless --path "$HERE" > "$CLI_LOG" 2>&1 &
 CLI=$!
-trap 'kill "$SRV" "$CLI" 2>/dev/null; wait "$SRV" "$CLI" 2>/dev/null; rm -f "$SRV_LOG" "$CLI_LOG"' EXIT
 
 # 等 agent-client 入场 + agent 桥监听
 ready=0

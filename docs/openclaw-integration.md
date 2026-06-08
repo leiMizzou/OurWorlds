@@ -39,7 +39,7 @@ spell out every piece if you'd rather do it by hand or debug a layer.
 
 Other prerequisites:
 
-- **Godot 4.6** (`/opt/homebrew/bin/godot`) or the exported app under `OurWorlds/build/macos/`.
+- **Godot 4.6** (`/opt/homebrew/bin/godot`) or the exported app under `<repo>/build/macos/OurWorlds.app`.
 - **OpenClaw** installed and its gateway running (`openclaw status`). Repo at
   `<openclaw>`, user config at `~/.openclaw`.
 - **Node** ≥ 18 (for the MCP server and for `mcporter`).

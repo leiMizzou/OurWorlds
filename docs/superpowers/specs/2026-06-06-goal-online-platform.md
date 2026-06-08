@@ -33,14 +33,14 @@
   - 任何"按钮一点就外发/上线/收费"的确认动作。
 - **必须用户肉眼确认**：联机时"多个窗口里互相看得见走动、看得见对方挖/放/瞬移"。
 
-## 现状（2026-06-06）
+## 现状（2026-06-07 复核）
 - ✅ M0（WorldData 数据核心）、M0.5（Web 烟测 + 字体）已完成并入 main。
-- ✅ **M1 完成**（分支 `m1-local-coop`，10 个任务全绿，52/52 自检）：headless 权威服务器 + 客户端，编辑/走动实时同步、增量持久、晚加入可见已有改动；端到端冒烟 `packaging/coop_smoke.sh` 通过。**仅剩"两个窗口里互看走动"的人工肉眼验收**（`packaging/run_coop_demo.sh`），我无头看不到画面。
-- ✅ **M2 完成**：网页客户端联机已实测（浏览器 Godot WASM 经 WebSocket 连上权威服务器并入场，控制台确认；多线程 crossOriginIsolated via COOP/COEP）；`?connect=ws://…` URL 参数自动连服（`Main._connect_url`）；**M2b AI agent 作为联机玩家**已验证（`packaging/agent_net_smoke.sh`：agent 走到远处建造，服务器按其真实位置授权）。小瑕：网页 Emscripten "blocking on main thread" 警告（非致命，M5 再优化）。
+- ✅ **M1 完成**（已并入 main）：headless 权威服务器 + 客户端，编辑/走动实时同步、增量持久、晚加入可见已有改动；端到端数据链路已复核通过。**仍建议保留"两个窗口里互看走动"的人工肉眼验收**（`packaging/run_coop_demo.sh`）。
+- ✅ **M2 完成**：网页客户端联机已实测（浏览器 Godot WASM 经 WebSocket 连上权威服务器并入场，控制台确认；多线程 crossOriginIsolated via COOP/COEP）；`?connect=ws://…` URL 参数自动连服（`Main._connect_url`）；**M2b AI agent 作为联机玩家**已复核（agent 走到远处建造，服务器按其真实位置授权）。小瑕：网页 Emscripten "blocking on main thread" 警告（非致命，M5 再优化）。
 - ✅ **M2.5 完成**：瞬移参观（在线列表「前往」+ `teleport_to_peer`）+ Blueprint 建造捕获/序列化/粘贴 + agent `capture_build`/`paste_build`（引擎 + MCP + 契约），全部单测过。
-- ✅ **M4 地基完成**：Nakama 后端跑通（docker）+ `NakamaClient` 邮箱密码认证（端到端验证）+ 游戏内登录界面（可达：注册/登录/游客）。共 57/57 自检。
+- ✅ **M4 地基完成**：Nakama 后端跑通（docker）+ `NakamaClient` 邮箱密码认证（端到端验证）+ 游戏内登录界面（可达：注册/登录/游客）。当前 headless 逻辑自检共 **70/70**。
 - ✅ **Mac App 导出已验证**：`build/macos/OurWorlds.zip` 含完整 `.app`。签名/公证待你的 Developer ID + Apple 凭证（`packaging/build_macos.sh` 就绪）。
 - ⬜ **头条功能就差你的外部步骤**（只有你能做）：M3 Cloudflare 公网（`deploy/README.md`）、M4 社交登录（注册 Google/GitHub/Twitter OAuth 应用）、Mac 公证（Apple 凭证）。
 - ⚙️ **一个 UX 决策（你定）**：登录是否门禁入场？这决定身份/云存档如何绑账号（账号身份握手需"先登录后连服"）。与此决策无关的"共享世界存档（按种子，世界重启不丢）"我可自主做。
 - ⬜ 仍可自主推进：共享世界云存档、M5 大厅/兴趣管理、M6 加固。
-- 📌 `main` 比 origin 领先 ~21 提交（未推送，等你发话）。M1 双窗口肉眼验收：`bash packaging/run_coop_demo.sh`。
+- 📌 `main` 当前仍有未推送提交；M1 双窗口肉眼验收：`bash packaging/run_coop_demo.sh`。

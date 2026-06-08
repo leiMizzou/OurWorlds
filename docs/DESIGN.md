@@ -59,10 +59,10 @@
 
 ## 怎么运行
 
-- 编辑器：用 Godot 打开 `OurWorlds` 工程，按 **F5**。
-- 命令行：`godot --path OurWorlds`
-- 截宏大全景：`VC_RADIUS=5 godot --path OurWorlds --script res://tests/shot_world.gd`
-- 自检：`godot --headless --path OurWorlds --script res://tests/test_mesher.gd`（造网格逻辑）；`test_play.gd`（进游戏路径）
+- 编辑器：用 Godot 打开本仓库根目录，按 **F5**。
+- 命令行：`godot --path .`
+- 截宏大全景：`VC_RADIUS=5 godot --path . --script res://tests/shot_world.gd`
+- 自检：`godot --headless --path . --script res://tests/test_mesher.gd`（造网格逻辑）；`godot --headless --path . --script res://tests/test_play.gd`（进游戏路径）；全量用 `bash tests/run_all.sh`
 
 ## 里程碑
 

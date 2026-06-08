@@ -6,17 +6,18 @@ Environment-specific details for reaching OurWorlds. (Skills define *how* tools 
 ## OurWorlds bridge
 
 - **Game launch:** `OW_AGENT_PORT=8970 godot --path <repo>`
-  (or the exported app under `OurWorlds/build/macos/`). The bridge is disabled unless
+  (or the exported app under `<repo>/build/macos/OurWorlds.app`). The bridge is disabled unless
   `OW_AGENT_PORT` is set.
-- **Transport:** plain TCP, NDJSON, `127.0.0.1:8970`, single client (the MCP server).
+- **Transport:** plain TCP, NDJSON, `127.0.0.1:8970`. The game bridge accepts multiple
+  simultaneous clients; the MCP server is usually one client of that bridge.
 - **MCP server name (via mcporter):** `ourworlds`
   (runs `node <repo>/agent-bridge-mcp/dist/index.js`, env `OW_AGENT_PORT=8970`).
 - **How I call it:** `mcporter call ourworlds.<tool> --args '{...}'`.
 
 ## Tools exposed by `ourworlds`
 
-`observe`, `look`, `goto`, `scan`, `place`, `break`, `build`, `get_block`, `say`, `set_goal`,
-`remember`, `get_memory`.
+`observe`, `identify`, `look`, `goto`, `scan`, `place`, `break`, `build`, `capture_build`,
+`paste_build`, `get_block`, `say`, `set_goal`, `remember`, `get_memory`.
 
 `build` templates: `platform`, `pillar`, `arch`, `wall`, `stairs`, `room_frame`, `cabin`,
 `campfire`, `bridge`, `garden`, `beacon_tower`, `signpost`.

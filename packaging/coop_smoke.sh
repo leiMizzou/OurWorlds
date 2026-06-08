@@ -10,7 +10,7 @@ GODOT="${GODOT:-godot}"
 PORT="${OW_PORT:-8973}"
 SRV_LOG="$(mktemp)"; CLI_LOG="$(mktemp)"
 
-OW_SERVER=1 OW_PORT="$PORT" VC_SEED=4242 "$GODOT" --headless --path "$HERE" > "$SRV_LOG" 2>&1 &
+OW_SERVER=1 OW_PORT="$PORT" VC_SEED=4242 "$GODOT" --verbose --headless --path "$HERE" > "$SRV_LOG" 2>&1 &
 SRV=$!
 trap 'kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null; rm -f "$SRV_LOG" "$CLI_LOG"' EXIT
 
@@ -24,7 +24,7 @@ done
 [ "$ready" = 1 ] || { echo "❌ 服务器未监听"; sed 's/^/  srv| /' "$SRV_LOG" | tail -8; exit 1; }
 
 # 客户端连上来，跑 ~6s 后自退
-OW_CONNECT="ws://127.0.0.1:$PORT" VC_NO_SAVE=1 "$GODOT" --headless --path "$HERE" --quit-after 360 > "$CLI_LOG" 2>&1
+OW_CONNECT="ws://127.0.0.1:$PORT" VC_NO_SAVE=1 "$GODOT" --verbose --headless --path "$HERE" --quit-after 360 > "$CLI_LOG" 2>&1
 
 err=0
 grep -qE "SCRIPT ERROR|Parse Error" "$CLI_LOG" && { echo "❌ 客户端有脚本错误"; grep -nE "SCRIPT ERROR|Parse Error" "$CLI_LOG" | head -5; err=1; }
