@@ -442,7 +442,11 @@ func _start_dedicated_server() -> void:
 		var gw_port := int(OS.get_environment("OW_AGENT_GATEWAY_PORT"))
 		var max_agents := int(OS.get_environment("OW_AGENT_MAX")) if OS.has_environment("OW_AGENT_MAX") else 8
 		var gw_rate := int(OS.get_environment("OW_AGENT_RATE")) if OS.has_environment("OW_AGENT_RATE") else 30
-		var tokens := AgentTokenStore.new(OS.get_environment("OW_AGENT_TOKENS") if OS.has_environment("OW_AGENT_TOKENS") else "")
+		# env 静态 token ∪ 门户自助签发的 token 文件（OW_AGENT_TOKEN_FILE）；store 会按 mtime 重载，
+		# 因此 /api/agent-token 新签发的 token 几秒内即可鉴权通过，无需重启。
+		var tokens := AgentTokenStore.new(
+			OS.get_environment("OW_AGENT_TOKENS") if OS.has_environment("OW_AGENT_TOKENS") else "",
+			OS.get_environment("OW_AGENT_TOKEN_FILE") if OS.has_environment("OW_AGENT_TOKEN_FILE") else "")
 		var gw := AgentGateway.new()
 		gw.name = "AgentGateway"
 		gw.setup(net_manager, data, tokens, max_agents, gw_rate)
