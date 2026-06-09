@@ -8,15 +8,28 @@
 #   GET  /install-agent.sh      -> web/portal/install-agent.sh   （curl … | sh 一行装桥）
 #   GET  /ourworlds-agent.mjs   -> web/portal/ourworlds-agent.mjs（打包好的单文件桥）
 #   POST /api/agent-token       -> 邀请码门控 + 限频，签发 ow_* token 并写入 OW_AGENT_TOKEN_FILE
+#
+# 以及 Agent Control Panel（管理面板，需独立 admin token）：
+#   GET  /agents                          -> web/portal/agents.html（启停常驻 agent 的页面）
+#   GET  /api/agents                      -> 列出常驻 agent（由 plist 发现）及其状态
+#   POST /api/agents/<label>/start        -> launchctl bootstrap gui/<uid> <plist>
+#   POST /api/agents/<label>/stop         -> launchctl bootout   gui/<uid>/<label>
+#   POST /api/agents/<label>/kick         -> launchctl kickstart -k gui/<uid>/<label>（立刻跑一班）
 # 端点配置（环境变量）：
 #   OW_PORTAL_GATE        必填的邀请码（未设/为空 => 签发功能关闭，503）
 #   OW_AGENT_TOKEN_FILE   token JSON 文件路径（未设/为空 => 签发功能关闭，503）
+#   OW_ADMIN_TOKEN        管理面板 token（与邀请码分开；未设/为空 => 管理 API 全部关闭，503）
+#   OW_LAUNCHAGENTS_DIR   plist 发现目录（默认 ~/Library/LaunchAgents；仅供测试覆盖）
+#   OW_LAUNCHCTL_UID      launchctl 域 uid（默认 os.getuid()；仅供测试覆盖）
 # 其余一切仍是 build/web 的静态文件服务，未改动。
+import glob
 import http.server
 import json
 import os
+import re
 import secrets
 import socketserver
+import subprocess
 import sys
 import threading
 import time
@@ -109,6 +122,103 @@ def _rate_limited(ip: str) -> bool:
         return False
 
 
+# ============================================================================
+# Agent Control Panel —— 管理面板：启停常驻 agent（launchd user-agents）。
+# 安全要点：
+#   1) 独立 admin token（OW_ADMIN_TOKEN），与公开邀请码分开；未配置 => 整组 503。
+#   2) 可控集合 = glob ~/Library/LaunchAgents/app.ourworlds.resident-*.plist —— 仅此白名单，
+#      核心服务（play-server/web/tunnel）永远不在内、无法被操作。
+#   3) label 另行用正则校验，且 plist 必须真实存在，否则 404；
+#      所有 launchctl 调用一律以 argv 列表传给 subprocess，绝不拼 shell 字符串、绝不把 label 格式化进命令。
+# ============================================================================
+
+# 常驻 agent 的 label 前缀与白名单正则（核心服务不含 "resident-" 故天然被排除）。
+RESIDENT_PREFIX = "app.ourworlds.resident-"
+RESIDENT_LABEL_RE = re.compile(r"^app\.ourworlds\.resident-[a-z0-9-]+$")
+# pid 行：launchctl print 输出里形如 "\tpid = 55142"（仅数字才算在跑）。
+_PID_RE = re.compile(r"^\s*pid\s*=\s*(\d+)\s*$", re.MULTILINE)
+
+
+def _admin_token() -> str:
+    return os.environ.get("OW_ADMIN_TOKEN", "") or ""
+
+
+def _admin_enabled() -> bool:
+    # 仅当运营者配置了独立 admin token 时，管理 API 才开启。
+    return _admin_token().strip() != ""
+
+
+def _launchagents_dir() -> str:
+    # 默认 ~/Library/LaunchAgents；OW_LAUNCHAGENTS_DIR 仅供测试指向假目录。
+    override = os.environ.get("OW_LAUNCHAGENTS_DIR", "").strip()
+    if override:
+        return override
+    return os.path.expanduser("~/Library/LaunchAgents")
+
+
+def _launch_uid() -> int:
+    # launchctl 域 uid；OW_LAUNCHCTL_UID 仅供测试覆盖。
+    override = os.environ.get("OW_LAUNCHCTL_UID", "").strip()
+    if override:
+        try:
+            return int(override)
+        except ValueError:
+            pass
+    return os.getuid()
+
+
+def _discover_residents() -> dict:
+    """发现可控的常驻 agent：label -> plist 绝对路径。
+
+    白名单 = glob app.ourworlds.resident-*.plist；额外用正则校验 label，
+    确保只有形如 resident-<slug> 的才进入（.plist.bak 等不会匹配 glob）。
+    """
+    out = {}
+    pattern = os.path.join(_launchagents_dir(), RESIDENT_PREFIX + "*.plist")
+    for path in sorted(glob.glob(pattern)):
+        label = os.path.basename(path)[:-len(".plist")]
+        if RESIDENT_LABEL_RE.match(label):
+            out[label] = path
+    return out
+
+
+def _resolve_resident(label) -> str:
+    """把请求里的 label 解析为它的 plist 路径；非法/未知 => None（调用方回 404）。
+
+    三重把关：正则白名单 + 在发现集合内 + plist 真实存在。任何注入式串都被挡在 subprocess 之外。
+    """
+    s = "" if label is None else str(label)
+    if not RESIDENT_LABEL_RE.match(s):
+        return None
+    residents = _discover_residents()
+    path = residents.get(s)
+    if not path or not os.path.isfile(path):
+        return None
+    return path
+
+
+def _run_launchctl(args) -> subprocess.CompletedProcess:
+    """以 argv 列表运行 launchctl（绝不经 shell）。args 是 launchctl 之后的参数列表。"""
+    return subprocess.run(["launchctl"] + list(args),
+                          capture_output=True, text=True, timeout=15)
+
+
+def _agent_running(label: str) -> tuple:
+    """返回 (running: bool, loaded: bool)。
+
+    launchctl print gui/<uid>/<label>：rc!=0 => 未加载（停止）；输出含数字 pid => 运行中；否则已加载/空闲。
+    """
+    uid = _launch_uid()
+    try:
+        cp = _run_launchctl(["print", "gui/%d/%s" % (uid, label)])
+    except Exception:
+        return (False, False)
+    if cp.returncode != 0:
+        return (False, False)
+    running = _PID_RE.search(cp.stdout or "") is not None
+    return (running, True)
+
+
 class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
@@ -149,6 +259,9 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
         if route in ("/onboard", "/onboard/"):
             self._serve_portal_file("onboard.html", "text/html; charset=utf-8")
             return True
+        if route in ("/agents", "/agents/", "/agents.html"):
+            self._serve_portal_file("agents.html", "text/html; charset=utf-8")
+            return True
         if route == "/install-agent.sh":
             self._serve_portal_file("install-agent.sh", "text/x-sh; charset=utf-8")
             return True
@@ -158,6 +271,10 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
         return False
 
     def do_GET(self):
+        route = self.path.split("?", 1)[0]
+        if route == "/api/agents":
+            self._handle_agents_list()
+            return
         if self._portal_get():
             return
         super().do_GET()
@@ -172,7 +289,110 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
         if route == "/api/agent-token":
             self._handle_agent_token()
             return
+        m = re.match(r"^/api/agents/([^/]+)/(start|stop|kick)$", route)
+        if m:
+            self._handle_agent_action(m.group(1), m.group(2))
+            return
         self.send_error(404, "Not Found")
+
+    # ---- 管理面板：鉴权 + 取请求体（admin token 可来自 header 或 POST body）----
+    def _read_json_body(self):
+        """读 JSON body；无 body 返回 {}，畸形返回 None。"""
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            return None
+        raw = self.rfile.read(length) if length > 0 else b""
+        if not raw:
+            return {}
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except Exception:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _admin_check(self, body=None):
+        """统一鉴权门：返回 True 表示已放行；否则已发完响应（503/403/429）返回 False。
+
+        admin token 接受 header X-OW-Admin，POST 也接受 body 里的 token/admin 字段。
+        """
+        if not _admin_enabled():
+            self._send_json(503, {"error": "admin disabled"})
+            return False
+        supplied = self.headers.get("X-OW-Admin", "") or ""
+        if not supplied and isinstance(body, dict):
+            supplied = str(body.get("token", "") or body.get("admin", "") or "")
+        # 常量时间比较，避免计时侧信道。
+        expected = _admin_token()
+        if not (supplied and secrets.compare_digest(str(supplied), expected)):
+            self._send_json(403, {"error": "forbidden"})
+            return False
+        ip = self.client_address[0] if self.client_address else "unknown"
+        if _rate_limited(ip):
+            self._send_json(429, {"error": "rate limited, try later"})
+            return False
+        return True
+
+    def _handle_agents_list(self):
+        try:
+            if not self._admin_check():
+                return
+            agents = []
+            for label, _path in _discover_residents().items():
+                running, loaded = _agent_running(label)
+                agents.append({
+                    "label": label,
+                    "name": label[len(RESIDENT_PREFIX):],
+                    "running": running,
+                    "loaded": loaded,
+                })
+            self._send_json(200, {"agents": agents})
+        except Exception:
+            try:
+                self._send_json(500, {"error": "internal error"})
+            except Exception:
+                pass
+
+    def _handle_agent_action(self, raw_label, action):
+        try:
+            body = self._read_json_body()
+            if body is None:
+                self._send_json(400, {"error": "bad request"})
+                return
+            if not self._admin_check(body):
+                return
+            # 白名单解析：正则 + 发现集合 + plist 存在，三者缺一即未知 agent（不触达 subprocess）。
+            plist = _resolve_resident(raw_label)
+            if not plist:
+                self._send_json(404, {"error": "unknown agent"})
+                return
+            label = str(raw_label)  # 已被正则证明安全
+            uid = _launch_uid()
+            if action == "start":
+                argv = ["bootstrap", "gui/%d" % uid, plist]
+            elif action == "stop":
+                argv = ["bootout", "gui/%d/%s" % (uid, label)]
+            else:  # kick —— 立刻跑一班
+                argv = ["kickstart", "-k", "gui/%d/%s" % (uid, label)]
+            try:
+                cp = _run_launchctl(argv)
+            except Exception:
+                self._send_json(502, {"error": "launchctl failed"})
+                return
+            # bootstrap 已加载 / bootout 未加载 都会非零 —— 不当致命错，回报最终状态即可。
+            running, loaded = _agent_running(label)
+            resp = {"ok": True, "running": running, "loaded": loaded,
+                    "label": label, "action": action, "rc": cp.returncode}
+            if cp.returncode != 0:
+                detail = (cp.stderr or cp.stdout or "").strip()
+                if detail:
+                    resp["detail"] = detail[:200]
+            self._send_json(200, resp)
+        except Exception:
+            try:
+                self._send_json(500, {"error": "internal error"})
+            except Exception:
+                pass
 
     def _handle_agent_token(self):
         try:
@@ -224,6 +444,7 @@ def main():
         print("OurWorlds Web: http://localhost:%d/  (COOP/COEP 已启用，支持多线程 WASM)" % PORT)
         print("  目录: %s" % WEB_DIR)
         print("  门户: /onboard  ·  签发: %s" % ("已开启" if _issuance_enabled() else "未配置(503)"))
+        print("  管理: /agents   ·  admin API: %s" % ("已开启" if _admin_enabled() else "未配置(503)"))
         print("  Ctrl+C 停止")
         try:
             httpd.serve_forever()

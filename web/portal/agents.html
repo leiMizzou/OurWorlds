@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OurWorlds · Agent 控制台 / Agent Control Panel</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232d; --line:#2a3340;
+    --fg:#e6edf3; --muted:#9aa7b4; --accent:#5db0ff; --accent2:#7ee0a0; --warn:#ffcc66;
+    --danger:#ff8a8a; --code:#0b0f14;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:760px;margin:0 auto;padding:28px 20px 80px}
+  header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:20px}
+  .cube{width:22px;height:22px;border-radius:5px;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 14px rgba(93,176,255,.5)}
+  .langbtn{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;
+    padding:6px 12px;cursor:pointer;font-size:13px}
+  .langbtn:hover{border-color:var(--accent)}
+  .sub{color:var(--muted);margin:2px 0 22px}
+  .step{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;margin:16px 0}
+  .step h2{margin:0 0 12px;font-size:16px;display:flex;align-items:center;gap:9px}
+  label.fld{display:block;margin:0 0 4px;color:var(--muted);font-size:13px}
+  input[type=password]{width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+    border-radius:9px;padding:10px 12px;font-size:14px;font-family:inherit}
+  input:focus{outline:none;border-color:var(--accent)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+  .row>div{flex:1;min-width:180px}
+  .btn{background:var(--accent);color:#06121f;border:0;border-radius:9px;padding:10px 16px;font-weight:600;
+    cursor:pointer;font-size:14px}
+  .btn:hover{filter:brightness(1.08)}
+  .btn:disabled{opacity:.5;cursor:default;filter:none}
+  .btn.sec{background:var(--panel2);color:var(--fg);border:1px solid var(--line)}
+  .btn.stop{background:var(--panel2);color:var(--danger);border:1px solid var(--line)}
+  .btn.stop:hover{border-color:var(--danger)}
+  .msg{font-size:13px;margin-top:10px}
+  .msg.err{color:var(--danger)}.msg.ok{color:var(--accent2)}.msg.muted{color:var(--muted)}
+  .hidden{display:none}
+  .agent{display:flex;align-items:center;gap:12px;padding:14px 4px;border-bottom:1px solid var(--line)}
+  .agent:last-child{border-bottom:0}
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--muted);flex:0 0 auto;
+    box-shadow:0 0 0 3px rgba(154,167,180,.12)}
+  .dot.on{background:var(--accent2);box-shadow:0 0 0 3px rgba(126,224,160,.18),0 0 10px rgba(126,224,160,.5)}
+  .ainfo{flex:1;min-width:0}
+  .aname{font-weight:600;font-size:15px}
+  .astat{color:var(--muted);font-size:12px;margin-top:1px}
+  .actions{display:flex;gap:8px;flex:0 0 auto}
+  .actions .btn{padding:7px 13px;font-size:13px}
+  .empty{color:var(--muted);font-size:13px;padding:8px 4px}
+  .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);
+    border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  footer{color:var(--muted);font-size:12px;margin-top:24px;text-align:center}
+  code.k{background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand"><span class="cube"></span> OurWorlds</div>
+    <button class="langbtn" id="lang" onclick="toggleLang()">EN</button>
+  </header>
+  <div class="sub" id="tagline"></div>
+
+  <!-- Connect -->
+  <div class="step" id="connectStep">
+    <h2><span id="s1title"></span></h2>
+    <div class="row">
+      <div>
+        <label class="fld" id="l_admin"></label>
+        <input type="password" id="admin" placeholder="" autocomplete="off"
+               onkeydown="if(event.key==='Enter')connect()">
+      </div>
+      <div style="flex:0 0 auto">
+        <button class="btn" id="connbtn" onclick="connect()"></button>
+      </div>
+    </div>
+    <div class="msg" id="connmsg"></div>
+  </div>
+
+  <!-- Agent list -->
+  <div class="step hidden" id="listStep">
+    <h2>
+      <span id="s2title"></span>
+      <button class="btn sec" id="refreshbtn" style="margin-left:auto;padding:6px 12px;font-size:12px"
+              onclick="refresh()"></button>
+    </h2>
+    <div id="list"></div>
+    <div class="msg" id="listmsg"></div>
+  </div>
+
+  <footer id="foot"></footer>
+</div>
+
+<script>
+"use strict";
+
+let lang = "zh";
+let adminToken = "";        // 仅存于内存，绝不落盘/localStorage
+let busy = false;
+
+// ---------- i18n ----------
+const T = {
+  tagline:{zh:"启停在本机常驻的 AI Agent（launchd 用户级服务），无需开终端。需要管理员 token。",
+           en:"Start/stop the resident AI agents (launchd user-agents) on this host — no terminal needed. Requires the admin token."},
+  s1:{zh:"连接", en:"Connect"},
+  l_admin:{zh:"管理员 token（OW_ADMIN_TOKEN）", en:"Admin token (OW_ADMIN_TOKEN)"},
+  admin_ph:{zh:"向运营者索取的管理 token", en:"admin token from the operator"},
+  connbtn:{zh:"连接", en:"Connect"},
+  s2:{zh:"常驻 Agent", en:"Resident agents"},
+  refresh:{zh:"刷新", en:"Refresh"},
+  connecting:{zh:"连接中…", en:"Connecting…"},
+  conn_need:{zh:"请先填管理员 token。", en:"Enter the admin token first."},
+  conn_403:{zh:"管理员 token 不对。", en:"Wrong admin token."},
+  conn_503:{zh:"服务器未开启管理 API（未设置 OW_ADMIN_TOKEN）。", en:"Admin API not enabled on the server (OW_ADMIN_TOKEN unset)."},
+  conn_429:{zh:"操作过于频繁，请稍后再试。", en:"Too many requests — try again shortly."},
+  conn_neterr:{zh:"连不上服务器。", en:"Could not reach the server."},
+  conn_fail:{zh:"连接失败：", en:"Connection failed: "},
+  empty:{zh:"没有发现常驻 agent（~/Library/LaunchAgents/app.ourworlds.resident-*.plist 为空）。",
+         en:"No resident agents found (no ~/Library/LaunchAgents/app.ourworlds.resident-*.plist)."},
+  st_running:{zh:"运行中", en:"running"},
+  st_stopped:{zh:"已停止", en:"stopped"},
+  st_idle:{zh:"已加载 · 空闲", en:"loaded · idle"},
+  start:{zh:"启动", en:"Start"},
+  stop:{zh:"停止", en:"Stop"},
+  kick:{zh:"立刻跑一班", en:"Run a shift now"},
+  act_503:{zh:"管理 API 已被关闭。", en:"Admin API was disabled."},
+  act_403:{zh:"管理员 token 不对。", en:"Wrong admin token."},
+  act_404:{zh:"未知 agent。", en:"Unknown agent."},
+  act_429:{zh:"操作过于频繁，请稍后再试。", en:"Too many requests — try again shortly."},
+  act_fail:{zh:"操作失败：", en:"Action failed: "},
+  act_ok:{zh:"已执行 ✓", en:"Done ✓"},
+  foot:{zh:"只有 app.ourworlds.resident-* 这类 agent 可被控制；play-server / web / tunnel 等核心服务永远不在其列。",
+        en:"Only app.ourworlds.resident-* agents are controllable; core services (play-server / web / tunnel) are never touched."}
+};
+const tr = k => (T[k] ? T[k][lang] : k);
+
+function setMsg(id, text, cls){
+  const el = document.getElementById(id);
+  el.className = "msg" + (cls ? " " + cls : "");
+  el.textContent = text;
+}
+
+// ---------- networking ----------
+async function api(method, path, withBody){
+  const opt = {method, headers:{"X-OW-Admin": adminToken}};
+  if(withBody){ opt.headers["Content-Type"]="application/json"; opt.body = JSON.stringify({}); }
+  return fetch(path, opt);
+}
+
+function errKeyFor(status){
+  if(status === 503) return "503";
+  if(status === 403) return "403";
+  if(status === 429) return "429";
+  if(status === 404) return "404";
+  return null;
+}
+
+async function connect(){
+  if(busy) return;
+  const tok = document.getElementById("admin").value;
+  if(!tok){ setMsg("connmsg", tr("conn_need"), "err"); return; }
+  adminToken = tok;
+  busy = true;
+  setMsg("connmsg", tr("connecting"), "muted");
+  let r;
+  try{
+    r = await api("GET", "/api/agents", false);
+  }catch(e){
+    busy = false; adminToken = "";
+    setMsg("connmsg", tr("conn_neterr"), "err"); return;
+  }
+  busy = false;
+  if(!r.ok){
+    adminToken = "";
+    const k = errKeyFor(r.status);
+    const m = k ? tr("conn_"+k) : (tr("conn_fail") + "HTTP " + r.status);
+    setMsg("connmsg", m, "err");
+    return;
+  }
+  setMsg("connmsg", "", "");
+  document.getElementById("listStep").classList.remove("hidden");
+  const data = await r.json();
+  renderList(data.agents || []);
+}
+
+async function refresh(){
+  if(busy || !adminToken) return;
+  busy = true;
+  setMsg("listmsg", tr("connecting"), "muted");
+  let r;
+  try{ r = await api("GET", "/api/agents", false); }
+  catch(e){ busy=false; setMsg("listmsg", tr("conn_neterr"), "err"); return; }
+  busy = false;
+  if(!r.ok){
+    const k = errKeyFor(r.status);
+    setMsg("listmsg", k ? tr("act_"+k) : (tr("act_fail")+"HTTP "+r.status), "err");
+    return;
+  }
+  setMsg("listmsg", "", "");
+  const data = await r.json();
+  renderList(data.agents || []);
+}
+
+async function doAction(label, action){
+  if(busy || !adminToken) return;
+  busy = true;
+  setMsg("listmsg", "", "");
+  let r;
+  try{
+    r = await api("POST", "/api/agents/" + encodeURIComponent(label) + "/" + action, true);
+  }catch(e){ busy=false; setMsg("listmsg", tr("conn_neterr"), "err"); return; }
+  busy = false;
+  if(!r.ok){
+    const k = errKeyFor(r.status);
+    setMsg("listmsg", k ? tr("act_"+k) : (tr("act_fail")+"HTTP "+r.status), "err");
+  } else {
+    setMsg("listmsg", tr("act_ok"), "ok");
+  }
+  // 不论成功与否都重新拉一次状态（操作可能部分生效）。
+  await refresh();
+}
+
+// ---------- render ----------
+function renderList(agents){
+  const box = document.getElementById("list");
+  box.textContent = "";
+  if(!agents.length){
+    const d = document.createElement("div");
+    d.className = "empty"; d.textContent = tr("empty");
+    box.appendChild(d);
+    return;
+  }
+  agents.forEach(a => {
+    const row = document.createElement("div");
+    row.className = "agent";
+
+    const dot = document.createElement("span");
+    dot.className = "dot" + (a.running ? " on" : "");
+    row.appendChild(dot);
+
+    const info = document.createElement("div");
+    info.className = "ainfo";
+    const nm = document.createElement("div");
+    nm.className = "aname"; nm.textContent = a.name || a.label;
+    const st = document.createElement("div");
+    st.className = "astat";
+    st.textContent = a.running ? tr("st_running") : (a.loaded ? tr("st_idle") : tr("st_stopped"));
+    info.appendChild(nm); info.appendChild(st);
+    row.appendChild(info);
+
+    const acts = document.createElement("div");
+    acts.className = "actions";
+    const toggle = document.createElement("button");
+    if(a.running){
+      toggle.className = "btn stop"; toggle.textContent = tr("stop");
+      toggle.onclick = () => doAction(a.label, "stop");
+    } else {
+      toggle.className = "btn"; toggle.textContent = tr("start");
+      toggle.onclick = () => doAction(a.label, "start");
+    }
+    const kick = document.createElement("button");
+    kick.className = "btn sec"; kick.textContent = tr("kick");
+    kick.onclick = () => doAction(a.label, "kick");
+    acts.appendChild(toggle); acts.appendChild(kick);
+    row.appendChild(acts);
+
+    box.appendChild(row);
+  });
+}
+
+function applyStaticText(){
+  document.documentElement.lang = lang;
+  document.getElementById("lang").textContent = lang==="zh" ? "EN" : "中文";
+  const set=(id,k)=>{document.getElementById(id).textContent=tr(k);};
+  set("tagline","tagline"); set("s1title","s1"); set("l_admin","l_admin");
+  set("connbtn","connbtn"); set("s2title","s2"); set("refreshbtn","refresh");
+  set("foot","foot");
+  document.getElementById("admin").placeholder = tr("admin_ph");
+}
+
+function toggleLang(){
+  lang = lang==="zh" ? "en" : "zh";
+  applyStaticText();
+  // 若已连接，按当前语言重画状态文案。
+  if(adminToken && !document.getElementById("listStep").classList.contains("hidden")){ refresh(); }
+}
+
+applyStaticText();
+</script>
+</body>
+</html>
