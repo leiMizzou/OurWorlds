@@ -2,13 +2,19 @@
 # Agent Control Panel 自检（standalone）—— 完全不触碰真实服务。
 #   - 把 serve_web.subprocess.run 换成桩：记录 argv、永不真正 launchctl 任何东西。
 #   - 发现目录指向临时目录里的假 plist（含一个必须被排除的 play-server 诱饵）。
-#   - 覆盖：admin 关闭 -> 503；缺/错 token -> 403；GET /api/agents 只列 resident-*；
+#   - 任务/日志目录也指向临时目录（OW_RESIDENT_TASK_DIR / OW_RESIDENT_LOG_DIR）。
+#   - 覆盖（v1）：admin 关闭 -> 503；缺/错 token -> 403；GET /api/agents 只列 resident-*；
 #           start/stop/kick 拼出正确 argv 且仅接受白名单 label；
 #           注入式 / 非 resident label -> 404 且绝不触达 subprocess。
+#   - 覆盖（v2）：/api/agents 含 interval；/log 行数钳制 + 缺失=空；/task GET/写回 +
+#           >8192B=413 + 非 resident label 不写文件；/config interval 校验 +
+#           ThrottleInterval 真改 + 重载是 argv；stop-all/start-all 只动发现集合
+#           （play-server 诱饵不被触碰）；所有新端点 admin 关闭=503、错 token=403。
 # 用法: python3 packaging/test_agent_control.py    （PASS/FAIL，失败 exit 非 0）
 import importlib
 import json
 import os
+import plistlib
 import socket
 import sys
 import tempfile
@@ -98,20 +104,36 @@ class _SubprocessStub:
 
 
 def _make_fake_launchagents(d):
-    """在 d 里造两个真 resident plist + 一个必须被排除的 play-server 诱饵 + 一个 .bak。"""
-    def w(name):
-        with open(os.path.join(d, name), "w") as f:
-            f.write("<?xml version='1.0'?><plist><dict/></plist>\n")
-    w("app.ourworlds.resident-codexbot.plist")
-    w("app.ourworlds.resident-gardenbot.plist")
-    w("app.ourworlds.play-server.plist")               # 诱饵：核心服务，绝不可出现/被操作
-    w("app.ourworlds.resident-old.plist.bak-20260101")  # .bak：不匹配 glob
+    """在 d 里造两个真 resident plist（含 ThrottleInterval）+ 一个必须被排除的
+    play-server 诱饵 + 一个 .bak。resident plist 用真 plistlib 写，便于 /config 往返校验。"""
+    def w_resident(name, interval):
+        data = {
+            "Label": "app.ourworlds.resident-%s" % name,
+            "ProgramArguments": ["/bin/sh", "/tmp/resident-%s.sh" % name],
+            "RunAtLoad": True,
+            "KeepAlive": True,
+            "ThrottleInterval": interval,
+        }
+        with open(os.path.join(d, "app.ourworlds.resident-%s.plist" % name), "wb") as f:
+            plistlib.dump(data, f)
+    w_resident("codexbot", 240)
+    w_resident("gardenbot", 300)
+    # 诱饵：核心服务，绝不可出现/被操作。用真 plistlib 写（含 ThrottleInterval 作哨兵）。
+    with open(os.path.join(d, "app.ourworlds.play-server.plist"), "wb") as f:
+        plistlib.dump({"Label": "app.ourworlds.play-server", "ThrottleInterval": 10}, f)
+    # .bak：不匹配 glob。
+    with open(os.path.join(d, "app.ourworlds.resident-old.plist.bak-20260101"), "w") as f:
+        f.write("<?xml version='1.0'?><plist><dict/></plist>\n")
 
 
 def main():
     tmp = tempfile.mkdtemp(prefix="ow_agentctl_test_")
     la_dir = os.path.join(tmp, "LaunchAgents")
+    task_dir = os.path.join(tmp, "tasks")
+    log_dir = os.path.join(tmp, "logs")
     os.makedirs(la_dir)
+    os.makedirs(task_dir)
+    os.makedirs(log_dir)
     _make_fake_launchagents(la_dir)
 
     FAKE_UID = "501"
@@ -120,6 +142,8 @@ def main():
     os.environ.pop("OW_ADMIN_TOKEN", None)
     os.environ["OW_LAUNCHAGENTS_DIR"] = la_dir
     os.environ["OW_LAUNCHCTL_UID"] = FAKE_UID
+    os.environ["OW_RESIDENT_TASK_DIR"] = task_dir
+    os.environ["OW_RESIDENT_LOG_DIR"] = log_dir
     # 限频窗口给足，避免误判 429。
     os.environ["OW_PORTAL_RATE_MAX"] = "1000"
     os.environ["OW_PORTAL_RATE_WINDOW"] = "600"
@@ -154,6 +178,21 @@ def main():
         code, body = _req("POST", base + "/api/agents/app.ourworlds.resident-codexbot/start", body={})
         check(code == 503 and body.get("error") == "admin disabled",
               "admin disabled -> POST start 503")
+        # v2 端点在 admin 关闭时也必须 503。
+        code, body = _req("GET", base + "/api/agents/app.ourworlds.resident-codexbot/log")
+        check(code == 503 and body.get("error") == "admin disabled", "admin disabled -> GET /log 503")
+        code, body = _req("GET", base + "/api/agents/app.ourworlds.resident-codexbot/task")
+        check(code == 503 and body.get("error") == "admin disabled", "admin disabled -> GET /task 503")
+        code, body = _req("POST", base + "/api/agents/app.ourworlds.resident-codexbot/task",
+                          body={"text": "x"})
+        check(code == 503 and body.get("error") == "admin disabled", "admin disabled -> POST /task 503")
+        code, body = _req("POST", base + "/api/agents/app.ourworlds.resident-codexbot/config",
+                          body={"interval": 240})
+        check(code == 503 and body.get("error") == "admin disabled", "admin disabled -> POST /config 503")
+        code, body = _req("POST", base + "/api/agents/stop-all", body={})
+        check(code == 503 and body.get("error") == "admin disabled", "admin disabled -> stop-all 503")
+        code, body = _req("POST", base + "/api/agents/start-all", body={})
+        check(code == 503 and body.get("error") == "admin disabled", "admin disabled -> start-all 503")
         check(len(stub.calls) == 0, "admin-disabled path never reached subprocess")
     finally:
         httpd.shutdown(); httpd.server_close()
@@ -183,6 +222,22 @@ def main():
         # 错 token -> 403
         code, body = _req("GET", base + "/api/agents", headers={"X-OW-Admin": "wrong"})
         check(code == 403 and body.get("error") == "forbidden", "wrong token -> 403 forbidden")
+        # v2 端点错 token 也必须 403。
+        W = {"X-OW-Admin": "wrong"}
+        code, _ = _req("GET", base + "/api/agents/app.ourworlds.resident-codexbot/log", headers=W)
+        check(code == 403, "wrong token -> GET /log 403")
+        code, _ = _req("GET", base + "/api/agents/app.ourworlds.resident-codexbot/task", headers=W)
+        check(code == 403, "wrong token -> GET /task 403")
+        code, _ = _req("POST", base + "/api/agents/app.ourworlds.resident-codexbot/task",
+                       headers=W, body={"text": "x"})
+        check(code == 403, "wrong token -> POST /task 403")
+        code, _ = _req("POST", base + "/api/agents/app.ourworlds.resident-codexbot/config",
+                       headers=W, body={"interval": 240})
+        check(code == 403, "wrong token -> POST /config 403")
+        code, _ = _req("POST", base + "/api/agents/stop-all", headers=W, body={})
+        check(code == 403, "wrong token -> stop-all 403")
+        code, _ = _req("POST", base + "/api/agents/start-all", headers=W, body={})
+        check(code == 403, "wrong token -> start-all 403")
         check(len(stub.calls) == 0, "auth failures never reached subprocess")
 
         H = {"X-OW-Admin": ADMIN}
@@ -206,6 +261,10 @@ def main():
               "gardenbot reported stopped (print rc!=0)")
         check(all(a["label"] != "app.ourworlds.play-server" for a in agents),
               "play-server never appears in /api/agents")
+        # v2：/api/agents 应带每个 agent 的 ThrottleInterval（来自 plist）。
+        check(by["app.ourworlds.resident-codexbot"].get("interval") == 240 and
+              by["app.ourworlds.resident-gardenbot"].get("interval") == 300,
+              "GET /api/agents includes interval (ThrottleInterval) per agent")
 
         # ---- start：正确 argv = bootstrap gui/<uid> <plist> ----
         stub.calls.clear()
@@ -268,6 +327,138 @@ def main():
         code, body = _req("POST", base + "/api/agents/app.ourworlds.resident-codexbot/nuke",
                           headers=H, body={})
         check(code == 404 and len(stub.calls) == 0, "unknown action verb -> 404, no subprocess")
+
+        # ================= v2：log / task / config / stop-all / start-all =================
+
+        # ---- GET /log：缺失日志 -> {"lines":[]} ----
+        code, body = _req("GET", base + "/api/agents/app.ourworlds.resident-codexbot/log", headers=H)
+        check(code == 200 and body.get("lines") == [], "missing log -> {lines: []}")
+
+        # 造一个 100 行的日志，验证默认 40 行 + ?lines=N 钳制（1..200）。
+        log_path = os.path.join(log_dir, "resident-codexbot.log")
+        with open(log_path, "w", encoding="utf-8") as f:
+            for i in range(1, 101):
+                f.write("line-%03d\n" % i)
+        code, body = _req("GET", base + "/api/agents/app.ourworlds.resident-codexbot/log", headers=H)
+        lines = body.get("lines", [])
+        check(code == 200 and len(lines) == 40 and lines[0] == "line-061" and lines[-1] == "line-100",
+              "GET /log default = last 40 lines")
+        code, body = _req("GET", base + "/api/agents/app.ourworlds.resident-codexbot/log?lines=5", headers=H)
+        check(body.get("lines") == ["line-096", "line-097", "line-098", "line-099", "line-100"],
+              "GET /log?lines=5 -> last 5 lines")
+        code, body = _req("GET", base + "/api/agents/app.ourworlds.resident-codexbot/log?lines=999", headers=H)
+        check(len(body.get("lines", [])) == 100, "GET /log?lines=999 clamps to <=200 (all 100 here)")
+        code, body = _req("GET", base + "/api/agents/app.ourworlds.resident-codexbot/log?lines=0", headers=H)
+        check(len(body.get("lines", [])) == 1, "GET /log?lines=0 clamps up to 1")
+
+        # ---- GET /task：缺失 -> 空串 ----
+        code, body = _req("GET", base + "/api/agents/app.ourworlds.resident-gardenbot/task", headers=H)
+        check(code == 200 and body.get("text") == "", "missing task file -> empty string")
+
+        # ---- POST /task 写入 + GET 往返 ----
+        msg = "今天去河边盖一座桥 / build a bridge by the river"
+        code, body = _req("POST", base + "/api/agents/app.ourworlds.resident-gardenbot/task",
+                          headers=H, body={"text": msg})
+        check(code == 200 and body.get("ok") is True and body.get("bytes") == len(msg.encode("utf-8")),
+              "POST /task -> ok + byte count")
+        task_path = os.path.join(task_dir, "resident-gardenbot-task.txt")
+        check(os.path.isfile(task_path) and open(task_path, encoding="utf-8").read() == msg,
+              "task file actually written with exact text")
+        code, body = _req("GET", base + "/api/agents/app.ourworlds.resident-gardenbot/task", headers=H)
+        check(code == 200 and body.get("text") == msg, "GET /task round-trips the written text")
+
+        # ---- POST /task 超 8192 字节 -> 413（且不覆盖既有文件）----
+        big = "x" * 8193
+        code, body = _req("POST", base + "/api/agents/app.ourworlds.resident-gardenbot/task",
+                          headers=H, body={"text": big})
+        check(code == 413, "POST /task > 8192 bytes -> 413")
+        check(open(task_path, encoding="utf-8").read() == msg, "413 did not overwrite the task file")
+        # 恰好 8192 字节应被接受（边界）。
+        exact = "y" * 8192
+        code, body = _req("POST", base + "/api/agents/app.ourworlds.resident-gardenbot/task",
+                          headers=H, body={"text": exact})
+        check(code == 200 and body.get("bytes") == 8192, "POST /task exactly 8192 bytes -> 200")
+
+        # ---- 非 resident / 注入 label 对 /task GET+POST 必须 404 且绝不落盘 ----
+        before = set(os.listdir(task_dir))
+        for bad in ["app.ourworlds.play-server", "app.ourworlds.resident-nope",
+                    "app.ourworlds.resident-x;rm -rf", "..%2F..%2Fetc"]:
+            code, _ = _req("GET", base + "/api/agents/" + quote(bad, safe="") + "/task", headers=H)
+            ok_get = (code == 404)
+            code, _ = _req("POST", base + "/api/agents/" + quote(bad, safe="") + "/task",
+                           headers=H, body={"text": "should-never-write"})
+            ok_post = (code == 404)
+            check(ok_get and ok_post, "non-whitelisted label (%s) -> /task 404" % bad)
+        check(set(os.listdir(task_dir)) == before, "rejected /task labels wrote NO file")
+
+        # ---- POST /config：interval 校验（拒 5、拒 999999、收 240）----
+        stub.calls.clear()
+        code, body = _req("POST", base + "/api/agents/app.ourworlds.resident-codexbot/config",
+                          headers=H, body={"interval": 5})
+        check(code == 400 and len(stub.calls) == 0, "config interval 5 -> 400, no reload")
+        code, body = _req("POST", base + "/api/agents/app.ourworlds.resident-codexbot/config",
+                          headers=H, body={"interval": 999999})
+        check(code == 400 and len(stub.calls) == 0, "config interval 999999 -> 400, no reload")
+        code, body = _req("POST", base + "/api/agents/app.ourworlds.resident-codexbot/config",
+                          headers=H, body={"interval": True})
+        check(code == 400, "config interval bool -> 400 (bool is not a valid int)")
+
+        # accept 240（codexbot 此前是 240，改成 600 以证明真的变了）----
+        stub.calls.clear()
+        code, body = _req("POST", base + "/api/agents/app.ourworlds.resident-codexbot/config",
+                          headers=H, body={"interval": 600})
+        check(code == 200 and body.get("ok") is True and body.get("interval") == 600,
+              "config interval 600 -> 200 ok")
+        # plist 里 ThrottleInterval 真的变成 600（用真 plistlib 读回）。
+        codex_plist = os.path.join(la_dir, "app.ourworlds.resident-codexbot.plist")
+        with open(codex_plist, "rb") as f:
+            reloaded = plistlib.load(f)
+        check(reloaded.get("ThrottleInterval") == 600,
+              "config actually rewrote ThrottleInterval in the plist (240 -> 600)")
+        check(reloaded.get("Label") == "app.ourworlds.resident-codexbot" and reloaded.get("KeepAlive") is True,
+              "config preserved other plist keys")
+        # 重载是 argv：bootout 然后 bootstrap（顺序）。
+        boot_calls = [c for c in stub.calls if c[1] in ("bootout", "bootstrap")]
+        check(boot_calls[:2] == [
+                  ["launchctl", "bootout", "gui/501/app.ourworlds.resident-codexbot"],
+                  ["launchctl", "bootstrap", "gui/501", codex_plist]],
+              "config reload is argv: bootout then bootstrap (no shell)")
+
+        # config 对非 resident label -> 404 且不改任何 plist / 不 reload。
+        stub.calls.clear()
+        play_plist = os.path.join(la_dir, "app.ourworlds.play-server.plist")
+        with open(play_plist, "rb") as f:
+            play_before = plistlib.load(f)
+        code, body = _req("POST", base + "/api/agents/app.ourworlds.play-server/config",
+                          headers=H, body={"interval": 240})
+        check(code == 404 and len(stub.calls) == 0, "config on core service -> 404, no reload")
+        with open(play_plist, "rb") as f:
+            check(plistlib.load(f) == play_before, "config 404 did NOT touch play-server.plist")
+
+        # ---- stop-all：只对发现集合 bootout；play-server 诱饵绝不出现 ----
+        stub.calls.clear()
+        code, body = _req("POST", base + "/api/agents/stop-all", headers=H, body={})
+        targets = [c[2].rsplit("/", 1)[-1] for c in stub.calls if c[1] == "bootout"]
+        check(code == 200 and body.get("ok") is True, "stop-all -> 200 ok")
+        check(sorted(targets) == ["app.ourworlds.resident-codexbot", "app.ourworlds.resident-gardenbot"],
+              "stop-all booted out exactly the two residents")
+        check(all("play-server" not in c[2] for c in stub.calls), "stop-all NEVER touched play-server decoy")
+        res_labels = sorted(r["label"] for r in body.get("results", []))
+        check(res_labels == ["app.ourworlds.resident-codexbot", "app.ourworlds.resident-gardenbot"],
+              "stop-all results cover only the two residents")
+
+        # ---- start-all：只对发现集合 bootstrap <plist>；诱饵绝不出现 ----
+        stub.calls.clear()
+        code, body = _req("POST", base + "/api/agents/start-all", headers=H, body={})
+        bs = [c for c in stub.calls if c[1] == "bootstrap"]
+        # argv = [launchctl, bootstrap, gui/<uid>, <plist>] —— plist 在索引 3。
+        bs_plists = sorted(c[3] for c in bs)
+        check(code == 200 and body.get("ok") is True, "start-all -> 200 ok")
+        check(bs_plists == sorted([
+                  os.path.join(la_dir, "app.ourworlds.resident-codexbot.plist"),
+                  os.path.join(la_dir, "app.ourworlds.resident-gardenbot.plist")]),
+              "start-all bootstrapped exactly the two resident plists")
+        check(all("play-server" not in " ".join(c) for c in stub.calls), "start-all NEVER touched play-server decoy")
 
         # ---- 页面可服务 ----
         code, body = _req("GET", base + "/agents")

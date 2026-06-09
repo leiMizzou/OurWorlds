@@ -40,17 +40,43 @@
   .msg{font-size:13px;margin-top:10px}
   .msg.err{color:var(--danger)}.msg.ok{color:var(--accent2)}.msg.muted{color:var(--muted)}
   .hidden{display:none}
-  .agent{display:flex;align-items:center;gap:12px;padding:14px 4px;border-bottom:1px solid var(--line)}
-  .agent:last-child{border-bottom:0}
+  .agentrow{border-bottom:1px solid var(--line)}
+  .agentrow:last-child{border-bottom:0}
+  .agent{display:flex;align-items:center;gap:12px;padding:14px 4px}
   .dot{width:11px;height:11px;border-radius:50%;background:var(--muted);flex:0 0 auto;
     box-shadow:0 0 0 3px rgba(154,167,180,.12)}
   .dot.on{background:var(--accent2);box-shadow:0 0 0 3px rgba(126,224,160,.18),0 0 10px rgba(126,224,160,.5)}
   .ainfo{flex:1;min-width:0}
   .aname{font-weight:600;font-size:15px}
   .astat{color:var(--muted);font-size:12px;margin-top:1px}
-  .actions{display:flex;gap:8px;flex:0 0 auto}
+  .actions{display:flex;gap:8px;flex:0 0 auto;align-items:center}
   .actions .btn{padding:7px 13px;font-size:13px}
+  .more{background:var(--panel2);color:var(--muted);border:1px solid var(--line);border-radius:9px;
+    padding:7px 11px;cursor:pointer;font-size:15px;line-height:1}
+  .more:hover{border-color:var(--accent);color:var(--fg)}
   .empty{color:var(--muted);font-size:13px;padding:8px 4px}
+  /* 行内展开面板：日志 / 任务 / 节律 */
+  .panel{padding:2px 4px 16px 35px;display:none}
+  .panel.open{display:block}
+  .panel h3{margin:14px 0 6px;font-size:13px;color:var(--accent);font-weight:600}
+  .panel h3:first-child{margin-top:4px}
+  .note{color:var(--muted);font-size:12px;margin:2px 0 6px}
+  textarea.task{width:100%;min-height:96px;resize:vertical;background:var(--code);color:var(--fg);
+    border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:13px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  textarea.task:focus{outline:none;border-color:var(--accent)}
+  input.num{width:110px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+    border-radius:9px;padding:8px 11px;font-size:14px;font-family:inherit}
+  input.num:focus{outline:none;border-color:var(--accent)}
+  .subrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px}
+  .subrow .btn{padding:7px 13px;font-size:13px}
+  pre.log{background:var(--code);border:1px solid var(--line);border-radius:9px;padding:10px 12px;
+    margin:6px 0 0;max-height:280px;overflow:auto;font-size:12px;line-height:1.5;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+  .submsg{font-size:12px;margin-top:6px;min-height:14px}
+  .submsg.err{color:var(--danger)}.submsg.ok{color:var(--accent2)}.submsg.muted{color:var(--muted)}
+  .bulk{display:flex;gap:8px;margin:0 0 6px}
+  .bulk .btn{padding:7px 13px;font-size:13px}
   .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);
     border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
   @keyframes sp{to{transform:rotate(360deg)}}
@@ -89,6 +115,10 @@
       <button class="btn sec" id="refreshbtn" style="margin-left:auto;padding:6px 12px;font-size:12px"
               onclick="refresh()"></button>
     </h2>
+    <div class="bulk">
+      <button class="btn stop" id="stopallbtn" onclick="bulkAction('stop')"></button>
+      <button class="btn sec" id="startallbtn" onclick="bulkAction('start')"></button>
+    </div>
     <div id="list"></div>
     <div class="msg" id="listmsg"></div>
   </div>
@@ -102,6 +132,7 @@
 let lang = "zh";
 let adminToken = "";        // 仅存于内存，绝不落盘/localStorage
 let busy = false;
+const expanded = new Set();  // 记住哪些 agent 的详情面板是展开的（刷新后保持）
 
 // ---------- i18n ----------
 const T = {
@@ -131,9 +162,32 @@ const T = {
   act_503:{zh:"管理 API 已被关闭。", en:"Admin API was disabled."},
   act_403:{zh:"管理员 token 不对。", en:"Wrong admin token."},
   act_404:{zh:"未知 agent。", en:"Unknown agent."},
+  act_413:{zh:"任务文本过长（上限 8192 字节）。", en:"Task text too large (8192-byte limit)."},
   act_429:{zh:"操作过于频繁，请稍后再试。", en:"Too many requests — try again shortly."},
   act_fail:{zh:"操作失败：", en:"Action failed: "},
   act_ok:{zh:"已执行 ✓", en:"Done ✓"},
+  stopall:{zh:"全部停止", en:"Stop All"},
+  startall:{zh:"全部启动", en:"Start All"},
+  confirm_stopall:{zh:"确定停止全部常驻 agent？", en:"Stop ALL resident agents?"},
+  confirm_startall:{zh:"确定启动全部常驻 agent？", en:"Start ALL resident agents?"},
+  more:{zh:"展开详情（日志 / 任务 / 节律）", en:"Expand (log / task / cadence)"},
+  h_log:{zh:"日志", en:"Log"},
+  h_task:{zh:"任务", en:"Task"},
+  h_cadence:{zh:"节律", en:"Cadence"},
+  refreshlog:{zh:"刷新日志", en:"Refresh log"},
+  logempty:{zh:"（暂无日志）", en:"(no log yet)"},
+  loglast:{zh:"最后约 40 行", en:"last ~40 lines"},
+  save:{zh:"保存", en:"Save"},
+  saved:{zh:"已保存 ✓", en:"Saved ✓"},
+  task_note:{zh:"下一班生效 / applies next shift", en:"applies next shift / 下一班生效"},
+  apply:{zh:"应用", en:"Apply"},
+  cadence_unit:{zh:"秒（30–86400）", en:"seconds (30–86400)"},
+  cadence_note:{zh:"重载生效 / reloads now", en:"reloads now / 重载生效"},
+  cadence_bad:{zh:"请输入 30–86400 之间的整数秒。", en:"Enter an integer 30–86400 (seconds)."},
+  applied:{zh:"已应用并重载 ✓", en:"Applied & reloaded ✓"},
+  loading:{zh:"加载中…", en:"Loading…"},
+  saving:{zh:"保存中…", en:"Saving…"},
+  applying:{zh:"应用中…", en:"Applying…"},
   foot:{zh:"只有 app.ourworlds.resident-* 这类 agent 可被控制；play-server / web / tunnel 等核心服务永远不在其列。",
         en:"Only app.ourworlds.resident-* agents are controllable; core services (play-server / web / tunnel) are never touched."}
 };
@@ -146,9 +200,13 @@ function setMsg(id, text, cls){
 }
 
 // ---------- networking ----------
+// withBody: false => no body; true => send "{}"; object => send that JSON.
 async function api(method, path, withBody){
   const opt = {method, headers:{"X-OW-Admin": adminToken}};
-  if(withBody){ opt.headers["Content-Type"]="application/json"; opt.body = JSON.stringify({}); }
+  if(withBody){
+    opt.headers["Content-Type"]="application/json";
+    opt.body = JSON.stringify(withBody === true ? {} : withBody);
+  }
   return fetch(path, opt);
 }
 
@@ -157,7 +215,15 @@ function errKeyFor(status){
   if(status === 403) return "403";
   if(status === 429) return "429";
   if(status === 404) return "404";
+  if(status === 413) return "413";
   return null;
+}
+
+// 子面板小消息（每行各自独立的状态行）。
+function setSub(el, text, cls){
+  if(!el) return;
+  el.className = "submsg" + (cls ? " " + cls : "");
+  el.textContent = text || "";
 }
 
 async function connect(){
@@ -225,6 +291,95 @@ async function doAction(label, action){
   await refresh();
 }
 
+// ---------- bulk: stop-all / start-all ----------
+async function bulkAction(action){
+  if(busy || !adminToken) return;
+  if(!confirm(tr(action === "stop" ? "confirm_stopall" : "confirm_startall"))) return;
+  busy = true;
+  setMsg("listmsg", tr("connecting"), "muted");
+  let r;
+  try{ r = await api("POST", "/api/agents/" + action + "-all", true); }
+  catch(e){ busy=false; setMsg("listmsg", tr("conn_neterr"), "err"); return; }
+  busy = false;
+  if(!r.ok){
+    const k = errKeyFor(r.status);
+    setMsg("listmsg", k ? tr("act_"+k) : (tr("act_fail")+"HTTP "+r.status), "err");
+  } else {
+    setMsg("listmsg", tr("act_ok"), "ok");
+  }
+  await refresh();
+}
+
+// ---------- per-agent: log / task / cadence ----------
+async function loadLog(label, preEl, msgEl){
+  if(!adminToken) return;
+  setSub(msgEl, tr("loading"), "muted");
+  let r;
+  try{ r = await api("GET", "/api/agents/" + encodeURIComponent(label) + "/log?lines=40", false); }
+  catch(e){ setSub(msgEl, tr("conn_neterr"), "err"); return; }
+  if(!r.ok){
+    const k = errKeyFor(r.status);
+    setSub(msgEl, k ? tr("act_"+k) : (tr("act_fail")+"HTTP "+r.status), "err");
+    return;
+  }
+  const data = await r.json();
+  const lines = data.lines || [];
+  preEl.textContent = lines.length ? lines.join("\n") : tr("logempty");
+  setSub(msgEl, "", "");
+}
+
+async function loadTask(label, taEl, msgEl){
+  if(!adminToken) return;
+  let r;
+  try{ r = await api("GET", "/api/agents/" + encodeURIComponent(label) + "/task", false); }
+  catch(e){ setSub(msgEl, tr("conn_neterr"), "err"); return; }
+  if(!r.ok){
+    const k = errKeyFor(r.status);
+    setSub(msgEl, k ? tr("act_"+k) : (tr("act_fail")+"HTTP "+r.status), "err");
+    return;
+  }
+  const data = await r.json();
+  taEl.value = data.text || "";
+  setSub(msgEl, "", "");
+}
+
+async function saveTask(label, taEl, msgEl){
+  if(busy || !adminToken) return;
+  busy = true;
+  setSub(msgEl, tr("saving"), "muted");
+  let r;
+  try{ r = await api("POST", "/api/agents/" + encodeURIComponent(label) + "/task", {text: taEl.value}); }
+  catch(e){ busy=false; setSub(msgEl, tr("conn_neterr"), "err"); return; }
+  busy = false;
+  if(!r.ok){
+    const k = errKeyFor(r.status);
+    setSub(msgEl, k ? tr("act_"+k) : (tr("act_fail")+"HTTP "+r.status), "err");
+  } else {
+    setSub(msgEl, tr("saved"), "ok");
+  }
+}
+
+async function applyCadence(label, inEl, msgEl){
+  if(busy || !adminToken) return;
+  const n = parseInt(inEl.value, 10);
+  if(!Number.isInteger(n) || n < 30 || n > 86400){
+    setSub(msgEl, tr("cadence_bad"), "err"); return;
+  }
+  busy = true;
+  setSub(msgEl, tr("applying"), "muted");
+  let r;
+  try{ r = await api("POST", "/api/agents/" + encodeURIComponent(label) + "/config", {interval: n}); }
+  catch(e){ busy=false; setSub(msgEl, tr("conn_neterr"), "err"); return; }
+  busy = false;
+  if(!r.ok){
+    const k = errKeyFor(r.status);
+    setSub(msgEl, k ? tr("act_"+k) : (tr("act_fail")+"HTTP "+r.status), "err");
+  } else {
+    setSub(msgEl, tr("applied"), "ok");
+    refresh();  // 状态/间隔可能变化，刷新列表
+  }
+}
+
 // ---------- render ----------
 function renderList(agents){
   const box = document.getElementById("list");
@@ -236,6 +391,10 @@ function renderList(agents){
     return;
   }
   agents.forEach(a => {
+    const wrap = document.createElement("div");
+    wrap.className = "agentrow";
+
+    // ---- 概要行：状态点 + 名称/状态 + 动作 + 展开 ----
     const row = document.createElement("div");
     row.className = "agent";
 
@@ -249,7 +408,9 @@ function renderList(agents){
     nm.className = "aname"; nm.textContent = a.name || a.label;
     const st = document.createElement("div");
     st.className = "astat";
-    st.textContent = a.running ? tr("st_running") : (a.loaded ? tr("st_idle") : tr("st_stopped"));
+    let stTxt = a.running ? tr("st_running") : (a.loaded ? tr("st_idle") : tr("st_stopped"));
+    if(a.interval != null){ stTxt += " · " + a.interval + "s"; }
+    st.textContent = stTxt;
     info.appendChild(nm); info.appendChild(st);
     row.appendChild(info);
 
@@ -266,11 +427,82 @@ function renderList(agents){
     const kick = document.createElement("button");
     kick.className = "btn sec"; kick.textContent = tr("kick");
     kick.onclick = () => doAction(a.label, "kick");
-    acts.appendChild(toggle); acts.appendChild(kick);
+    const more = document.createElement("button");
+    more.className = "more"; more.textContent = "⋯";
+    more.title = tr("more"); more.setAttribute("aria-label", tr("more"));
+    acts.appendChild(toggle); acts.appendChild(kick); acts.appendChild(more);
     row.appendChild(acts);
+    wrap.appendChild(row);
 
-    box.appendChild(row);
+    // ---- 展开面板：日志 / 任务 / 节律 ----
+    const panel = buildPanel(a);
+    if(expanded.has(a.label)) panel.classList.add("open");
+    more.onclick = () => {
+      const willOpen = !panel.classList.contains("open");
+      panel.classList.toggle("open", willOpen);
+      if(willOpen){ expanded.add(a.label); } else { expanded.delete(a.label); }
+    };
+    wrap.appendChild(panel);
+
+    box.appendChild(wrap);
   });
+}
+
+// 构造单个 agent 的详情面板（日志 / 任务 / 节律），自带各自的状态行与按钮。
+function buildPanel(a){
+  const panel = document.createElement("div");
+  panel.className = "panel";
+
+  // --- 日志 ---
+  const hLog = document.createElement("h3"); hLog.textContent = tr("h_log");
+  panel.appendChild(hLog);
+  const logMsg = document.createElement("div"); logMsg.className = "submsg";
+  const pre = document.createElement("pre"); pre.className = "log"; pre.textContent = tr("loglast");
+  const logRow = document.createElement("div"); logRow.className = "subrow";
+  const refLog = document.createElement("button");
+  refLog.className = "btn sec"; refLog.textContent = tr("refreshlog");
+  refLog.onclick = () => loadLog(a.label, pre, logMsg);
+  logRow.appendChild(refLog);
+  panel.appendChild(logRow); panel.appendChild(pre); panel.appendChild(logMsg);
+
+  // --- 任务 ---
+  const hTask = document.createElement("h3"); hTask.textContent = tr("h_task");
+  panel.appendChild(hTask);
+  const taskNote = document.createElement("div"); taskNote.className = "note";
+  taskNote.textContent = tr("task_note");
+  panel.appendChild(taskNote);
+  const ta = document.createElement("textarea");
+  ta.className = "task"; ta.spellcheck = false;
+  panel.appendChild(ta);
+  const taskMsg = document.createElement("div"); taskMsg.className = "submsg";
+  const taskRow = document.createElement("div"); taskRow.className = "subrow";
+  const saveBtn = document.createElement("button");
+  saveBtn.className = "btn"; saveBtn.textContent = tr("save");
+  saveBtn.onclick = () => saveTask(a.label, ta, taskMsg);
+  taskRow.appendChild(saveBtn);
+  panel.appendChild(taskRow); panel.appendChild(taskMsg);
+  loadTask(a.label, ta, taskMsg);   // 进入即预填当前任务文本
+
+  // --- 节律 ---
+  const hCad = document.createElement("h3"); hCad.textContent = tr("h_cadence");
+  panel.appendChild(hCad);
+  const cadNote = document.createElement("div"); cadNote.className = "note";
+  cadNote.textContent = tr("cadence_note");
+  panel.appendChild(cadNote);
+  const cadMsg = document.createElement("div"); cadMsg.className = "submsg";
+  const cadRow = document.createElement("div"); cadRow.className = "subrow";
+  const num = document.createElement("input");
+  num.type = "number"; num.className = "num"; num.min = "30"; num.max = "86400"; num.step = "1";
+  if(a.interval != null) num.value = a.interval;
+  const unit = document.createElement("span");
+  unit.className = "note"; unit.style.margin = "0"; unit.textContent = tr("cadence_unit");
+  const applyBtn = document.createElement("button");
+  applyBtn.className = "btn"; applyBtn.textContent = tr("apply");
+  applyBtn.onclick = () => applyCadence(a.label, num, cadMsg);
+  cadRow.appendChild(num); cadRow.appendChild(unit); cadRow.appendChild(applyBtn);
+  panel.appendChild(cadRow); panel.appendChild(cadMsg);
+
+  return panel;
 }
 
 function applyStaticText(){
@@ -279,6 +511,7 @@ function applyStaticText(){
   const set=(id,k)=>{document.getElementById(id).textContent=tr(k);};
   set("tagline","tagline"); set("s1title","s1"); set("l_admin","l_admin");
   set("connbtn","connbtn"); set("s2title","s2"); set("refreshbtn","refresh");
+  set("stopallbtn","stopall"); set("startallbtn","startall");
   set("foot","foot");
   document.getElementById("admin").placeholder = tr("admin_ph");
 }

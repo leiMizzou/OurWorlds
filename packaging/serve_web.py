@@ -11,21 +11,30 @@
 #
 # 以及 Agent Control Panel（管理面板，需独立 admin token）：
 #   GET  /agents                          -> web/portal/agents.html（启停常驻 agent 的页面）
-#   GET  /api/agents                      -> 列出常驻 agent（由 plist 发现）及其状态
+#   GET  /api/agents                      -> 列出常驻 agent（由 plist 发现）及其状态 + interval
 #   POST /api/agents/<label>/start        -> launchctl bootstrap gui/<uid> <plist>
 #   POST /api/agents/<label>/stop         -> launchctl bootout   gui/<uid>/<label>
 #   POST /api/agents/<label>/kick         -> launchctl kickstart -k gui/<uid>/<label>（立刻跑一班）
+#   GET  /api/agents/<label>/log?lines=N  -> 读取该 agent 日志最后 N 行（只读；缺失=空）
+#   GET  /api/agents/<label>/task         -> 读取该 agent 任务文件（缺失=空串）
+#   POST /api/agents/<label>/task         -> 写任务文件（原子写；>8192B=413）下一班生效
+#   POST /api/agents/<label>/config       -> 改 plist 的 ThrottleInterval 并重载（重载生效）
+#   POST /api/agents/stop-all             -> bootout 所有发现到的常驻（只动白名单集合）
+#   POST /api/agents/start-all            -> bootstrap 所有发现到的常驻（只动白名单集合）
 # 端点配置（环境变量）：
 #   OW_PORTAL_GATE        必填的邀请码（未设/为空 => 签发功能关闭，503）
 #   OW_AGENT_TOKEN_FILE   token JSON 文件路径（未设/为空 => 签发功能关闭，503）
 #   OW_ADMIN_TOKEN        管理面板 token（与邀请码分开；未设/为空 => 管理 API 全部关闭，503）
 #   OW_LAUNCHAGENTS_DIR   plist 发现目录（默认 ~/Library/LaunchAgents；仅供测试覆盖）
 #   OW_LAUNCHCTL_UID      launchctl 域 uid（默认 os.getuid()；仅供测试覆盖）
+#   OW_RESIDENT_TASK_DIR  任务文件目录（默认 ~/.ourworlds；仅供测试覆盖）
+#   OW_RESIDENT_LOG_DIR   日志文件目录（默认 ~/Library/Logs/ourworlds；仅供测试覆盖）
 # 其余一切仍是 build/web 的静态文件服务，未改动。
 import glob
 import http.server
 import json
 import os
+import plistlib
 import re
 import secrets
 import socketserver
@@ -167,6 +176,53 @@ def _launch_uid() -> int:
     return os.getuid()
 
 
+def _task_dir() -> str:
+    # 任务文件目录，默认 ~/.ourworlds；OW_RESIDENT_TASK_DIR 仅供测试覆盖。
+    override = os.environ.get("OW_RESIDENT_TASK_DIR", "").strip()
+    if override:
+        return override
+    return os.path.expanduser("~/.ourworlds")
+
+
+def _log_dir() -> str:
+    # 日志文件目录，默认 ~/Library/Logs/ourworlds；OW_RESIDENT_LOG_DIR 仅供测试覆盖。
+    override = os.environ.get("OW_RESIDENT_LOG_DIR", "").strip()
+    if override:
+        return override
+    return os.path.expanduser("~/Library/Logs/ourworlds")
+
+
+def _name_of(label: str) -> str:
+    """从已白名单化的 label 取出 <name>（去掉 resident- 前缀）。
+
+    label 已经过 RESIDENT_LABEL_RE 校验，故 name 只可能是 [a-z0-9-]+，绝无 / . \\。
+    仍在此处断言一次，作为纵深防御——任何带路径分隔符的 name 立刻抛错而不会拼进路径。
+    """
+    name = label[len(RESIDENT_PREFIX):]
+    assert name and not any(c in name for c in ("/", "\\", ".", "\0")), "unsafe resident name"
+    return name
+
+
+def _task_path(label: str) -> str:
+    # 用 os.path.join 拼接（绝不字符串格式化路径）；name 已被 _name_of 断言无分隔符。
+    return os.path.join(_task_dir(), "resident-%s-task.txt" % _name_of(label))
+
+
+def _log_path(label: str) -> str:
+    return os.path.join(_log_dir(), "resident-%s.log" % _name_of(label))
+
+
+def _read_interval(plist_path: str):
+    """从 plist 读取 ThrottleInterval（int）；缺失/不可读 => None。"""
+    try:
+        with open(plist_path, "rb") as f:
+            data = plistlib.load(f)
+        val = data.get("ThrottleInterval")
+        return int(val) if isinstance(val, int) else None
+    except Exception:
+        return None
+
+
 def _discover_residents() -> dict:
     """发现可控的常驻 agent：label -> plist 绝对路径。
 
@@ -275,6 +331,14 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
         if route == "/api/agents":
             self._handle_agents_list()
             return
+        m = re.match(r"^/api/agents/([^/]+)/log$", route)
+        if m:
+            self._handle_agent_log(m.group(1))
+            return
+        m = re.match(r"^/api/agents/([^/]+)/task$", route)
+        if m:
+            self._handle_agent_task_get(m.group(1))
+            return
         if self._portal_get():
             return
         super().do_GET()
@@ -289,9 +353,20 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
         if route == "/api/agent-token":
             self._handle_agent_token()
             return
+        if route in ("/api/agents/stop-all", "/api/agents/start-all"):
+            self._handle_agents_bulk("stop" if route.endswith("stop-all") else "start")
+            return
         m = re.match(r"^/api/agents/([^/]+)/(start|stop|kick)$", route)
         if m:
             self._handle_agent_action(m.group(1), m.group(2))
+            return
+        m = re.match(r"^/api/agents/([^/]+)/task$", route)
+        if m:
+            self._handle_agent_task_post(m.group(1))
+            return
+        m = re.match(r"^/api/agents/([^/]+)/config$", route)
+        if m:
+            self._handle_agent_config(m.group(1))
             return
         self.send_error(404, "Not Found")
 
@@ -338,13 +413,14 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
             if not self._admin_check():
                 return
             agents = []
-            for label, _path in _discover_residents().items():
+            for label, path in _discover_residents().items():
                 running, loaded = _agent_running(label)
                 agents.append({
                     "label": label,
                     "name": label[len(RESIDENT_PREFIX):],
                     "running": running,
                     "loaded": loaded,
+                    "interval": _read_interval(path),
                 })
             self._send_json(200, {"agents": agents})
         except Exception:
@@ -388,6 +464,207 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
                 if detail:
                     resp["detail"] = detail[:200]
             self._send_json(200, resp)
+        except Exception:
+            try:
+                self._send_json(500, {"error": "internal error"})
+            except Exception:
+                pass
+
+    def _handle_agent_log(self, raw_label):
+        """GET /api/agents/<label>/log?lines=N —— 只读该 agent 日志最后 N 行（默认 40，钳到 1..200）。"""
+        try:
+            if not self._admin_check():
+                return
+            if not _resolve_resident(raw_label):
+                self._send_json(404, {"error": "unknown agent"})
+                return
+            label = str(raw_label)  # 已被白名单证明安全
+            # 解析 ?lines=N（无效/越界即钳到 [1,200]，默认 40）。
+            n = 40
+            qs = self.path.split("?", 1)
+            if len(qs) == 2:
+                m = re.search(r"(?:^|&)lines=(\d+)", qs[1])
+                if m:
+                    try:
+                        n = int(m.group(1))
+                    except ValueError:
+                        n = 40
+            n = max(1, min(200, n))
+            path = _log_path(label)
+            lines = []
+            if os.path.isfile(path):
+                # 读尾部即可：文件可能很大，只取末尾约 256KB 再切最后 n 行，避免整文件载入。
+                try:
+                    with open(path, "rb") as f:
+                        f.seek(0, os.SEEK_END)
+                        size = f.tell()
+                        chunk = min(size, 262144)
+                        f.seek(size - chunk)
+                        raw = f.read()
+                    text = raw.decode("utf-8", errors="replace")
+                    all_lines = text.splitlines()
+                    lines = all_lines[-n:]
+                except Exception:
+                    lines = []
+            self._send_json(200, {"lines": lines})
+        except Exception:
+            try:
+                self._send_json(500, {"error": "internal error"})
+            except Exception:
+                pass
+
+    def _handle_agent_task_get(self, raw_label):
+        """GET /api/agents/<label>/task —— 返回任务文件内容（缺失=空串）。"""
+        try:
+            if not self._admin_check():
+                return
+            if not _resolve_resident(raw_label):
+                self._send_json(404, {"error": "unknown agent"})
+                return
+            label = str(raw_label)
+            path = _task_path(label)
+            text = ""
+            if os.path.isfile(path):
+                try:
+                    with open(path, "r", encoding="utf-8", errors="replace") as f:
+                        text = f.read()
+                except Exception:
+                    text = ""
+            self._send_json(200, {"text": text})
+        except Exception:
+            try:
+                self._send_json(500, {"error": "internal error"})
+            except Exception:
+                pass
+
+    def _handle_agent_task_post(self, raw_label):
+        """POST /api/agents/<label>/task body {"text": "..."} —— 原子写任务文件（>8192B=413）。"""
+        try:
+            body = self._read_json_body()
+            if body is None:
+                self._send_json(400, {"error": "bad request"})
+                return
+            if not self._admin_check(body):
+                return
+            # 白名单解析必须在任何文件写入之前。
+            if not _resolve_resident(raw_label):
+                self._send_json(404, {"error": "unknown agent"})
+                return
+            label = str(raw_label)
+            text = body.get("text", "")
+            if not isinstance(text, str):
+                self._send_json(400, {"error": "text must be a string"})
+                return
+            encoded = text.encode("utf-8")
+            if len(encoded) > 8192:
+                self._send_json(413, {"error": "task too large (max 8192 bytes)"})
+                return
+            path = _task_path(label)
+            parent = os.path.dirname(os.path.abspath(path))
+            if parent and not os.path.isdir(parent):
+                os.makedirs(parent, exist_ok=True)
+            # 原子写：临时文件 + os.replace，避免 agent 读到半截任务。
+            with _FILE_LOCK:
+                tmp = path + ".tmp"
+                with open(tmp, "wb") as f:
+                    f.write(encoded)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, path)
+            self._send_json(200, {"ok": True, "bytes": len(encoded)})
+        except Exception:
+            try:
+                self._send_json(500, {"error": "internal error"})
+            except Exception:
+                pass
+
+    def _handle_agent_config(self, raw_label):
+        """POST /api/agents/<label>/config body {"interval": int} —— 改 ThrottleInterval 并重载。"""
+        try:
+            body = self._read_json_body()
+            if body is None:
+                self._send_json(400, {"error": "bad request"})
+                return
+            if not self._admin_check(body):
+                return
+            plist = _resolve_resident(raw_label)
+            if not plist:
+                self._send_json(404, {"error": "unknown agent"})
+                return
+            label = str(raw_label)
+            interval = body.get("interval")
+            # 校验 int（拒绝 bool / 非整数 / 越界），区间 [30, 86400]。
+            if isinstance(interval, bool) or not isinstance(interval, int):
+                self._send_json(400, {"error": "interval must be an integer"})
+                return
+            if interval < 30 or interval > 86400:
+                self._send_json(400, {"error": "interval out of range (30..86400)"})
+                return
+            # 读改写 plist（原子）：plistlib.load -> set ThrottleInterval -> plistlib.dump。
+            try:
+                with _FILE_LOCK:
+                    with open(plist, "rb") as f:
+                        data = plistlib.load(f)
+                    if not isinstance(data, dict):
+                        data = {}
+                    data["ThrottleInterval"] = interval
+                    tmp = plist + ".tmp"
+                    with open(tmp, "wb") as f:
+                        plistlib.dump(data, f)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(tmp, plist)
+            except Exception:
+                self._send_json(500, {"error": "failed to write plist"})
+                return
+            # 重载以使新 cadence 生效：bootout 再 bootstrap（argv，绝不经 shell）。
+            uid = _launch_uid()
+            try:
+                _run_launchctl(["bootout", "gui/%d/%s" % (uid, label)])
+                cp = _run_launchctl(["bootstrap", "gui/%d" % uid, plist])
+            except Exception:
+                self._send_json(502, {"error": "launchctl reload failed"})
+                return
+            resp = {"ok": True, "interval": interval, "label": label, "rc": cp.returncode}
+            if cp.returncode != 0:
+                detail = (cp.stderr or cp.stdout or "").strip()
+                if detail:
+                    resp["detail"] = detail[:200]
+            self._send_json(200, resp)
+        except Exception:
+            try:
+                self._send_json(500, {"error": "internal error"})
+            except Exception:
+                pass
+
+    def _handle_agents_bulk(self, action):
+        """POST /api/agents/{stop-all,start-all} —— 只对发现到的常驻集合 bootout/bootstrap。
+
+        绝不触及核心服务：操作集合 == _discover_residents()（白名单 glob + 正则）。
+        """
+        try:
+            body = self._read_json_body()
+            if body is None:
+                self._send_json(400, {"error": "bad request"})
+                return
+            if not self._admin_check(body):
+                return
+            uid = _launch_uid()
+            results = []
+            for label, plist in _discover_residents().items():
+                if action == "stop":
+                    argv = ["bootout", "gui/%d/%s" % (uid, label)]
+                else:  # start
+                    argv = ["bootstrap", "gui/%d" % uid, plist]
+                try:
+                    cp = _run_launchctl(argv)
+                    rc = cp.returncode
+                except Exception:
+                    rc = -1
+                running, loaded = _agent_running(label)
+                results.append({"label": label, "rc": rc,
+                                "running": running, "loaded": loaded})
+            self._send_json(200, {"ok": True, "action": action, "results": results})
         except Exception:
             try:
                 self._send_json(500, {"error": "internal error"})
