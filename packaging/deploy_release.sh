@@ -34,7 +34,13 @@ for SVC in app.ourworlds.play-server app.ourworlds.play-web; do
   [ -f "$PL" ] || continue
   if grep -q "$REL" "$PL"; then
     launchctl bootout "gui/$UID_N/$SVC" 2>/dev/null || true
-    launchctl bootstrap "gui/$UID_N" "$PL"
+    # launchctl bootstrap 偶发瞬态 "5: Input/output error"——重试最多 3 次
+    ok=""
+    for _ in 1 2 3; do
+      if launchctl bootstrap "gui/$UID_N" "$PL" 2>/dev/null; then ok=1; break; fi
+      sleep 2
+    done
+    [ -n "$ok" ] || launchctl bootstrap "gui/$UID_N" "$PL"   # 最后一次让错误冒出来
     echo "    重启: $SVC（release）"
   else
     echo "    跳过: $SVC（plist 未指向发布目录，仍跑原路径）"
