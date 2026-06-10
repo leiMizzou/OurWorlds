@@ -163,7 +163,51 @@ def main():
         with urllib.request.urlopen(req, timeout=5) as r:
             coop = r.headers.get("Cross-Origin-Opener-Policy", "")
             coep = r.headers.get("Cross-Origin-Embedder-Policy", "")
+            onboard_cc = r.headers.get("Cache-Control", "")
         check(coop == "same-origin" and coep == "require-corp", "/onboard still carries COOP/COEP headers")
+
+        # ---------- 缓存策略 + 预压缩协商（37MB wasm 的加载修复）----------
+        check(onboard_cc == "no-store", "/onboard (page) stays no-store")
+
+        def _get_raw(url, headers=None):
+            rq = urllib.request.Request(url, headers=headers or {})
+            try:
+                with urllib.request.urlopen(rq, timeout=5) as r:
+                    return r.status, r.read(), r.headers
+            except urllib.error.HTTPError as e:
+                return e.code, e.read(), e.headers
+
+        # 静态根换成临时目录（绝不写真实 build/web）；handler 每请求读模块全局，热切换即生效。
+        webtmp = os.path.join(tmpdir, "web")
+        os.makedirs(webtmp, exist_ok=True)
+        serve_web.WEB_DIR = webtmp
+        original = b"WASMDATA" * 512
+        with open(os.path.join(webtmp, "index.wasm"), "wb") as f:
+            f.write(original)
+        import gzip as _gzip
+        gz_bytes = _gzip.compress(original, 9)
+        with open(os.path.join(webtmp, "index.wasm.gz"), "wb") as f:
+            f.write(gz_bytes)
+
+        code, body, hs = _get_raw(base + "/index.wasm")
+        check(code == 200 and body == original and not hs.get("Content-Encoding"),
+              "no Accept-Encoding -> original bytes, no Content-Encoding")
+        check(hs.get("Cache-Control", "") == "public, max-age=3600", "big asset gets public max-age cache header")
+
+        code, body, hs = _get_raw(base + "/index.wasm", {"Accept-Encoding": "gzip"})
+        check(code == 200 and hs.get("Content-Encoding") == "gzip" and body == gz_bytes,
+              "Accept-Encoding gzip -> serves the precompressed .gz bytes")
+        check(hs.get("Vary", "") == "Accept-Encoding", "compressed response carries Vary: Accept-Encoding")
+        check(hs.get("Cache-Control", "") == "public, max-age=3600", "compressed asset also cacheable")
+
+        import email.utils as _eut
+        future = _eut.formatdate(time.time() + 3600, usegmt=True)
+        code, body, hs = _get_raw(base + "/index.wasm",
+                                  {"Accept-Encoding": "gzip", "If-Modified-Since": future})
+        check(code == 304, "If-Modified-Since (fresh) on compressed asset -> 304")
+
+        code, body, hs = _get_raw(base + "/api/agent-token")
+        check(hs.get("Cache-Control", "") == "no-store", "/api responses stay no-store")
     finally:
         httpd.shutdown()
         httpd.server_close()

@@ -12,9 +12,22 @@ GODOT="${GODOT:-godot}"
 OUT="$HERE/build/web"
 PORT="${PORT:-8060}"
 
-echo "==> [1/2] 导出 Web → $OUT/index.html"
+echo "==> [1/3] 导出 Web → $OUT/index.html"
 rm -rf "$OUT"; mkdir -p "$OUT"
 "$GODOT" --headless --path "$HERE" --export-release "Web" "$OUT/index.html"
 
-echo "==> [2/2] 起本地服务器（COOP/COEP，多线程 WASM 需要）"
+echo "==> [2/3] 预压缩大资产（serve_web 按 Accept-Encoding 直发 .br/.gz —— 37MB wasm 压到约 1/4）"
+for f in "$OUT"/index.wasm "$OUT"/index.pck "$OUT"/index.js; do
+  [ -f "$f" ] || continue
+  gzip -9 -kf "$f"
+  if command -v brotli >/dev/null 2>&1; then brotli -q 9 -f -o "$f.br" "$f"; fi
+done
+ls -la "$OUT" | awk '{print "    "$5"\t"$9}' | grep -E 'wasm|pck|index\.js' || true
+
+# OW_SERVE=0：只构建不起服务（部署脚本用）；默认保持原行为——构建完本地起服。
+if [ "${OW_SERVE:-1}" = "0" ]; then
+  echo "==> 完成（OW_SERVE=0，不起本地服务器）"
+  exit 0
+fi
+echo "==> [3/3] 起本地服务器（COOP/COEP，多线程 WASM 需要）"
 exec python3 "$HERE/packaging/serve_web.py" "$PORT"

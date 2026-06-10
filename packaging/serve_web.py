@@ -30,6 +30,7 @@
 #   OW_RESIDENT_TASK_DIR  任务文件目录（默认 ~/.ourworlds；仅供测试覆盖）
 #   OW_RESIDENT_LOG_DIR   日志文件目录（默认 ~/Library/Logs/ourworlds；仅供测试覆盖）
 # 其余一切仍是 build/web 的静态文件服务，未改动。
+import email.utils
 import glob
 import http.server
 import json
@@ -279,12 +280,59 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
 
+    # 大静态资产（wasm/pck/js/图标 及其压缩变体）可被浏览器缓存；页面与 /api 永远 no-store。
+    _CACHEABLE_RE = re.compile(r"\.(wasm|pck|js|mjs|png|ico|gz|br)$")
+
     def end_headers(self):
         # SharedArrayBuffer / 多线程 WASM 的硬性要求
         self.send_header("Cross-Origin-Opener-Policy", "same-origin")
         self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
-        self.send_header("Cache-Control", "no-store")
+        # 此前全站 no-store：37MB 的 wasm 每次访问都整包重拉（免费隧道下基本打不开）。
+        # 现在大资产 max-age=1h——窗口内零请求，过期后凭 If-Modified-Since 304 复用，近乎零流量。
+        p = self.path.split("?", 1)[0]
+        if not p.startswith("/api/") and self._CACHEABLE_RE.search(p):
+            self.send_header("Cache-Control", "public, max-age=3600")
+        else:
+            self.send_header("Cache-Control", "no-store")
         super().end_headers()
+
+    # ---- 预压缩资产协商：存在 <file>.br/.gz 且客户端声明支持时直发压缩文件 ----
+    # build_web.sh 导出后会生成 index.{wasm,pck,js}.gz（有 brotli 则再加 .br）。
+    # 37MB wasm 压到约 1/4——这是免费隧道下网页打得开打不开的关键。
+    def send_head(self):
+        fs_path = self.translate_path(self.path)
+        if os.path.isfile(fs_path):
+            accept = self.headers.get("Accept-Encoding", "")
+            for enc, ext in (("br", ".br"), ("gzip", ".gz")):
+                if enc not in accept:
+                    continue
+                cpath = fs_path + ext
+                if not os.path.isfile(cpath):
+                    continue
+                try:
+                    st = os.stat(cpath)
+                    ims = self.headers.get("If-Modified-Since")
+                    if ims:
+                        try:
+                            ims_dt = email.utils.parsedate_to_datetime(ims)
+                            if ims_dt is not None and int(st.st_mtime) <= int(ims_dt.timestamp()):
+                                self.send_response(304)
+                                self.end_headers()
+                                return None
+                        except (TypeError, ValueError, OverflowError):
+                            pass
+                    f = open(cpath, "rb")
+                except OSError:
+                    continue
+                self.send_response(200)
+                self.send_header("Content-Type", self.guess_type(fs_path))  # 原文件的类型
+                self.send_header("Content-Length", str(st.st_size))
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+                self.send_header("Last-Modified", self.date_time_string(int(st.st_mtime)))
+                self.end_headers()
+                return f
+        return super().send_head()
 
     # ---- 工具：发一段 body（已带 COOP/COEP/Cache-Control，经由 end_headers）----
     def _send_bytes(self, code: int, body: bytes, content_type: str):
