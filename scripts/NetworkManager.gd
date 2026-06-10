@@ -17,6 +17,9 @@ const PLAYER_REACH := 8.0          # 服务器校验：编辑点离该玩家的�
 const PLAYER_REACH_MARGIN := 1.0   # 手臂/视角补偿：允许编辑脚下/眼前紧邻一格
 const EDIT_RATE_WINDOW := 1.0      # 频率限制窗口（秒）
 const EDIT_RATE_MAX := 96          # 每窗口每 peer 最多接受的编辑次数
+const CHAT_RATE_WINDOW := 10.0     # 聊天限频窗口（秒）——编辑早有限频，聊天此前没有（防刷屏）
+const CHAT_RATE_MAX := 5           # 每窗口每 peer 最多聊天条数（human 与 agent 同限）
+const PROTOCOL_VERSION := 1        # 联机协议版本：welcome / 网关 auth 应答下发；不一致客户端告警
 
 var mode: Mode = Mode.OFFLINE
 var world                          # World 节点（CLIENT/HOST）；SERVER 为空
@@ -31,6 +34,7 @@ var _peers := {}                   # peer_id:int -> {eid, name, pos:Vector3, yaw
 var _eid_counter := 0
 var _vpeer_counter := 0            # 虚拟 peer 计数器（负 id 占位）
 var _self_eid := ""                # 本端自己的 eid（CLIENT/HOST）；快照里跳过它
+var server_protocol := -1          # 客户端：welcome 里收到的服务器协议版本（-1 = 未收到）
 var _avatars := {}                 # eid -> RemoteAvatar 节点（CLIENT）
 var _net_presence := {}            # 客户端：从快照登记进 chat_hub 在线列表的 eid 集合（掉出快照即注销）
 var report_node: Node3D = null     # 客户端上报哪个节点的位置：默认玩家；agent-client 设成 agent 小人，
@@ -159,6 +163,25 @@ func _accept_rate(peer_id: int, now: float) -> bool:
 	_peers[peer_id]["edits"] = keep
 	return true
 
+# 聊天的滑动窗口限频（与 _accept_rate 同构，独立窗口/上限；"chats" 键懒初始化）。
+func _accept_chat_rate(peer_id: int, now: float) -> bool:
+	if not _peers.has(peer_id):
+		return false
+	var t := now
+	if t < 0.0:
+		t = float(Time.get_ticks_msec()) / 1000.0
+	var hits: Array = _peers[peer_id].get("chats", [])
+	var keep := []
+	for ts in hits:
+		if t - float(ts) < CHAT_RATE_WINDOW:
+			keep.append(ts)
+	if keep.size() >= CHAT_RATE_MAX:
+		_peers[peer_id]["chats"] = keep
+		return false
+	keep.append(t)
+	_peers[peer_id]["chats"] = keep
+	return true
+
 # 服务器：给一个刚连进来的 peer 打包入场信息（种子+出生点+本端 eid+在线名册+全部增量）。
 # M1 世界小，直接发全部 delta；兴趣管理（按区块按需发）是 M5。
 # ---- 服务器世界存档（本地文件，JSON 增量；世界重启不丢。按种子另存）----
@@ -230,6 +253,7 @@ func build_welcome(peer_id: int) -> Dictionary:
 		roster.append({"eid": p["eid"], "name": p["name"], "pos": [pos.x, pos.y, pos.z]})
 	var sp: Vector3 = _peers[peer_id]["pos"] if _peers.has(peer_id) else _spawn
 	return {
+		"protocol": PROTOCOL_VERSION,
 		"seed": _seed,
 		"kind": world_kind,
 		"spawn": [sp.x, sp.y, sp.z],
@@ -240,6 +264,9 @@ func build_welcome(peer_id: int) -> Dictionary:
 
 # 客户端：套用 welcome —— 用服务器种子建世界并载入增量。world 由 Main 在 CLIENT 模式下注入。
 func apply_welcome(payload: Dictionary) -> void:
+	server_protocol = int(payload.get("protocol", 0))
+	if protocol_mismatch():
+		push_warning("协议版本不一致：服务器 %d / 本端 %d —— 请更新客户端（旧客户端可能出现同步异常）。" % [server_protocol, PROTOCOL_VERSION])
 	_seed = int(payload.get("seed", 1337))
 	world_kind = str(payload.get("kind", "infinite"))
 	var sp: Array = payload.get("spawn", [0, 0, 0])
@@ -341,6 +368,29 @@ var world_kind := "infinite"         # 权威世界类型；随 welcome 下发�
 var _save_accum := 0.0
 const AUTOSAVE_SEC := 30.0
 const SAVE_VERSION := 1
+
+# 客户端是否检测到与服务器协议版本不一致（apply_welcome 后有效）。
+func protocol_mismatch() -> bool:
+	return server_protocol >= 0 and server_protocol != PROTOCOL_VERSION
+
+# 周期写 presence（在线人数/agent 数）到 user://，居民班车经 /api/world/status 读它"无人跳班"。
+const PRESENCE_SEC := 10.0
+const PRESENCE_PATH := "user://presence.json"
+var _presence_accum := 0.0
+
+func write_presence(path: String = PRESENCE_PATH) -> void:
+	var humans := 0
+	var agents := 0
+	for pid in _peers:
+		if pid > 0:
+			humans += 1
+		else:
+			agents += 1
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_string(JSON.stringify({"humans": humans, "agents": agents, "t": int(Time.get_unix_time_from_system())}))
+	f.close()
 
 func is_server() -> bool:
 	return mode == Mode.SERVER or mode == Mode.HOST
@@ -458,6 +508,8 @@ func _rpc_say(to_eid: String, text: String) -> void:
 	var sender := multiplayer.get_remote_sender_id()
 	if not _peers.has(sender):
 		return
+	if not _accept_chat_rate(sender, -1.0):
+		return                      # 刷屏丢弃（静默；客户端本地回显也走广播，故超限者自己也看不到）
 	_server_post_chat(str(_peers[sender]["eid"]), to_eid, text)
 
 # ---- RPC：服务器->客户端 ----
@@ -531,6 +583,8 @@ func local_say(to_eid: String, text: String) -> void:
 	if is_client():
 		_rpc_say.rpc_id(1, to_eid, text)
 	elif is_server():
+		if _peers.has(1) and not _accept_chat_rate(1, -1.0):
+			return                  # HOST 本人同样限频
 		_server_post_chat(_self_eid, to_eid, text)
 
 # ---- 帧循环：服务器广播玩家快照；客户端上报自身位置（~15Hz）----
@@ -550,6 +604,10 @@ func _process(delta: float) -> void:
 			if _save_accum >= AUTOSAVE_SEC:
 				_save_accum = 0.0
 				save_world(world_save_path)
+		_presence_accum += delta           # 周期写 presence（居民班车"无人跳班"的数据源）
+		if _presence_accum >= PRESENCE_SEC:
+			_presence_accum = 0.0
+			write_presence()
 	elif is_client():
 		_self_sync_accum += delta
 		if _self_sync_accum >= 1.0 / SNAPSHOT_HZ:
@@ -583,8 +641,10 @@ func update_virtual_peer(eid: String, pos: Vector3, yaw: float) -> void:
 	var pid := _vpid_for(eid)
 	if pid != 0: set_peer_transform(pid, pos, yaw)
 
-func virtual_say(eid: String, text: String, to: String = "") -> void:
-	if chat_hub == null or _vpid_for(eid) == 0: return
+func virtual_say(eid: String, text: String, to: String = "", now: float = -1.0) -> void:
+	var vpid := _vpid_for(eid)
+	if chat_hub == null or vpid == 0: return
+	if not _accept_chat_rate(vpid, now): return
 	# 走统一权威路径：写进 chat_hub（agent 直读）的同时，也广播给人类客户端，
 	# 这样 agent 发言别的玩家也看得见（之前只 post 进 hub，联机里人类收不到）。
 	_server_post_chat(eid, to, text)

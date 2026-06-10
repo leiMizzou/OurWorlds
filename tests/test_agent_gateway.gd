@@ -28,6 +28,7 @@ func _initialize() -> void:
 
 	var ok := gw.handle_envelope(conn, {"id": 0, "tool": "auth", "args": {"token": "aaa", "name": "Bot"}})
 	check(bool(ok.get("ok", false)) and str((ok["result"] as Dictionary).get("eid","")).begins_with("agent-"), "auth spawns body")
+	check(int((ok["result"] as Dictionary).get("protocol", -1)) == nm.PROTOCOL_VERSION, "auth 应答带协议版本号")
 	check(nm.build_player_snapshot().size() == 1, "body in roster after auth")
 
 	var ob := gw.handle_envelope(conn, {"id": 2, "tool": "observe", "args": {}})

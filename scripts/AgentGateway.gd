@@ -90,13 +90,13 @@ func handle_envelope(conn: int, env: Dictionary) -> Dictionary:
 		st["hits"] = []
 		_conns[conn] = st
 		var pos = _nm.peer_position(eid)
-		return {"id": id, "ok": true, "result": {"eid": eid, "spawn": [pos.x, pos.y, pos.z]}}
+		return {"id": id, "ok": true, "result": {"eid": eid, "spawn": [pos.x, pos.y, pos.z], "protocol": _nm.PROTOCOL_VERSION}}
 
 	# 已鉴权后的重复 auth：幂等回当前身体信息（不重复注册、不占新名额）。
 	if tool == "auth":
 		var cur_eid := str(st.get("eid", ""))
 		var cur_pos = _nm.peer_position(cur_eid)
-		return {"id": id, "ok": true, "result": {"eid": cur_eid, "spawn": [cur_pos.x, cur_pos.y, cur_pos.z]}}
+		return {"id": id, "ok": true, "result": {"eid": cur_eid, "spawn": [cur_pos.x, cur_pos.y, cur_pos.z], "protocol": _nm.PROTOCOL_VERSION}}
 
 	# 反刷限流（仅作用于鉴权后的非 auth 调用；<=0 表示不限，单测默认走这条不受影响）。
 	if _rate_per_sec > 0 and not _allow_hit(st):

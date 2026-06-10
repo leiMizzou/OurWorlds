@@ -92,6 +92,39 @@ func _initialize() -> void:
 	check(ids2.has("agent-1"), "仍在快照的 eid 保留")
 	check(ids2.has("player-9"), "本端 self id 永不被注销")
 
+	# ---- 聊天限频：每 peer 滑动窗口，防刷屏（编辑早有限频，聊天此前没有）----
+	var rl := NetworkManager.new()
+	rl.mode = NetworkManager.Mode.SERVER
+	rl.set_authority_data(WorldData.new(5), 5, Vector3.ZERO)
+	var rhub := ChatHub.new()
+	rl.chat_hub = rhub
+	var re := str(rl.register_virtual_peer("Spammer"))
+	for i in range(NetworkManager.CHAT_RATE_MAX + 3):
+		rl.virtual_say(re, "msg %d" % i, "", 1000.0)
+	check(rhub.lobby_recent(50).size() == NetworkManager.CHAT_RATE_MAX,
+		"窗口内只收 CHAT_RATE_MAX 条（超出被丢弃）")
+	rl.virtual_say(re, "later", "", 1000.0 + NetworkManager.CHAT_RATE_WINDOW + 0.1)
+	check(rhub.lobby_recent(50).size() == NetworkManager.CHAT_RATE_MAX + 1,
+		"窗口滑过后恢复接收")
+
+	# ---- presence 文件：服务器写人数/agent 数（居民"无人跳班"省 token 的数据源）----
+	var pp := "user://tests/presence_test.json"
+	if FileAccess.file_exists(pp):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(pp))
+	var pn := NetworkManager.new()
+	pn.mode = NetworkManager.Mode.SERVER
+	pn.set_authority_data(WorldData.new(6), 6, Vector3.ZERO)
+	pn.register_peer(1, "h1")
+	pn.register_peer(2, "h2")
+	pn.register_virtual_peer("bot")
+	pn.write_presence(pp)
+	var pj := JSON.new()
+	check(pj.parse(FileAccess.get_file_as_string(pp)) == OK, "presence 文件是合法 JSON")
+	var pd: Dictionary = pj.data
+	check(int(pd.get("humans", -1)) == 2 and int(pd.get("agents", -1)) == 1,
+		"presence 统计正确（humans=2, agents=1）")
+	check(int(pd.get("t", 0)) > 0, "presence 带时间戳")
+
 	if failed == 0: print("✅ ALL CHAT RELAY TESTS PASSED")
 	else: printerr("❌ ", failed, " 个 chat-relay 测试失败")
 	quit(0 if failed == 0 else 1)

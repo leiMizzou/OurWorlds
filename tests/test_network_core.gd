@@ -72,6 +72,19 @@ func _initialize() -> void:
 	check(int(welcome.get("seed", 0)) == 2024, "welcome 带服务器种子")
 	check(str(welcome.get("your_eid", "")) == pe, "welcome 带本端 eid")
 	check((welcome.get("deltas", {}) as Dictionary).size() == 1, "welcome 带 1 个脏区块增量")
+	check(int(welcome.get("protocol", -1)) == NetworkManager.PROTOCOL_VERSION, "welcome 带协议版本号")
+
+	# 协议不一致：客户端 apply_welcome 后能感知（push_warning + protocol_mismatch()）
+	var pmis := NetworkManager.new()
+	pmis.mode = NetworkManager.Mode.CLIENT
+	var wmis := welcome.duplicate(true)
+	wmis["protocol"] = NetworkManager.PROTOCOL_VERSION + 99
+	pmis.apply_welcome(wmis)
+	check(pmis.protocol_mismatch(), "协议不一致 → protocol_mismatch() == true")
+	var pok := NetworkManager.new()
+	pok.mode = NetworkManager.Mode.CLIENT
+	pok.apply_welcome(welcome)
+	check(not pok.protocol_mismatch(), "协议一致 → 无误报")
 
 	# 客户端：用一个空 WorldData 套用 welcome 的增量，地形应一致
 	var cdata := WorldData.new(int(welcome["seed"]))
