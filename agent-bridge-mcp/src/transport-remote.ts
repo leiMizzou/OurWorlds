@@ -22,6 +22,8 @@ import WebSocket from "ws";
 const REQUEST_TIMEOUT_MS = 15_000;
 const CONNECT_TIMEOUT_MS = 4_000;
 const RECONNECT_COOLDOWN_MS = 750;
+// Keep in sync with NetworkManager.PROTOCOL_VERSION (the gateway echoes it in the auth reply).
+const EXPECTED_PROTOCOL = 1;
 
 // stderr only — stdout is the MCP JSON-RPC channel.
 function log(...args: unknown[]): void {
@@ -155,6 +157,11 @@ class RemoteClientImpl implements RemoteClient {
               ws.terminate();
               reject(new Error(`auth rejected by ${this.url}: ${env.error ?? "unknown"}`));
             } else {
+              const proto = (env.result as { protocol?: number } | undefined)?.protocol;
+              if (typeof proto === "number" && proto !== EXPECTED_PROTOCOL) {
+                log(`WARNING: server protocol v${proto} != bridge v${EXPECTED_PROTOCOL} — ` +
+                    `re-run the installer (curl …/install-agent.sh | sh) to update the bridge`);
+              }
               this.ws = ws;
               // Unref the underlying socket so the WebSocket does not prevent
               // Node from exiting when no other work is pending (e.g. in tests).
