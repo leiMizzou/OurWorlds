@@ -162,30 +162,65 @@ func _accept_rate(peer_id: int, now: float) -> bool:
 # 服务器：给一个刚连进来的 peer 打包入场信息（种子+出生点+本端 eid+在线名册+全部增量）。
 # M1 世界小，直接发全部 delta；兴趣管理（按区块按需发）是 M5。
 # ---- 服务器世界存档（本地文件，JSON 增量；世界重启不丢。按种子另存）----
+# 原子写：先写 <path>.tmp 再 rename 覆盖——崩溃在写中也不会损坏主档。
+# 轮转备份：每 BACKUP_EVERY 次存盘把主档复制为 .bak1（旧 bak 依次后移，保留 BACKUP_SLOTS 份），
+# 30s 自动存盘下约每 10 分钟一份；load_world 在主档损坏/缺失时按 bak1..bakN 依次恢复。
+const BACKUP_SLOTS := 3
+const BACKUP_EVERY := 20
+var _saves_since_backup := BACKUP_EVERY   # 初始即视为“该备份”：上线后第一次覆盖存盘就建立 bak1
+
 func save_world(path: String) -> bool:
 	if _data == null or path == "":
 		return false
-	var f := FileAccess.open(path, FileAccess.WRITE)
+	var tmp := path + ".tmp"
+	var f := FileAccess.open(tmp, FileAccess.WRITE)
 	if f == null:
 		return false
 	f.store_string(JSON.stringify({"version": SAVE_VERSION, "kind": world_kind, "seed": _seed, "edits": _data.all_deltas()}))
 	f.close()
-	return true
+	if FileAccess.file_exists(path) and _saves_since_backup >= BACKUP_EVERY:
+		_rotate_backups(path)
+		_saves_since_backup = 0
+	_saves_since_backup += 1
+	return DirAccess.rename_absolute(tmp, path) == OK
+
+func _rotate_backups(path: String) -> void:
+	for i in range(BACKUP_SLOTS - 1, 0, -1):
+		var src := "%s.bak%d" % [path, i]
+		if FileAccess.file_exists(src):
+			DirAccess.rename_absolute(src, "%s.bak%d" % [path, i + 1])
+	DirAccess.copy_absolute(path, path + ".bak1")
 
 func load_world(path: String) -> bool:
-	if _data == null or path == "" or not FileAccess.file_exists(path):
+	if _data == null or path == "":
 		return false
+	var candidates := [path]
+	for i in range(1, BACKUP_SLOTS + 1):
+		candidates.append("%s.bak%d" % [path, i])
+	for raw_path in candidates:
+		var cpath: String = raw_path
+		var parsed := _parse_world_save(cpath)
+		if parsed.is_empty():
+			continue
+		if cpath != path:
+			push_warning("主存档损坏/缺失，已从备份恢复：%s" % cpath)
+		world_kind = str(parsed.get("kind", world_kind))
+		var edits: Variant = parsed.get("edits", {})
+		if typeof(edits) == TYPE_DICTIONARY:
+			_data.load_deltas(edits)
+		return true
+	return false
+
+# 解析一个存档文件；缺失/坏 JSON/非字典 → 返回空字典（调用方据此尝试下一个候选）。
+func _parse_world_save(path: String) -> Dictionary:
+	if not FileAccess.file_exists(path):
+		return {}
 	var p := JSON.new()
 	if p.parse(FileAccess.get_file_as_string(path)) != OK:
-		return false
-	var raw: Variant = p.data
-	if typeof(raw) != TYPE_DICTIONARY:
-		return false
-	world_kind = str((raw as Dictionary).get("kind", world_kind))
-	var edits: Variant = (raw as Dictionary).get("edits", {})
-	if typeof(edits) == TYPE_DICTIONARY:
-		_data.load_deltas(edits)
-	return true
+		return {}
+	if typeof(p.data) != TYPE_DICTIONARY:
+		return {}
+	return p.data
 
 func build_welcome(peer_id: int) -> Dictionary:
 	var roster := []

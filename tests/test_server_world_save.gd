@@ -55,6 +55,42 @@ func _initialize() -> void:
 	check(kb.load_world(kind_path), "kind 轮回：载入成功")
 	check(kb.world_kind == "themed_island", "kind 轮回：world_kind 还原为 themed_island")
 
+	# ---- 原子写 + 轮转备份 + 损坏恢复（防"写一半崩溃 = 世界损坏"）----
+	var ap := "user://tests/server_world_atomic.json"
+	for ext in ["", ".tmp", ".bak1", ".bak2", ".bak3"]:
+		var fp: String = ap + str(ext)
+		if FileAccess.file_exists(fp):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(fp))
+	var c := NetworkManager.new()
+	c.mode = NetworkManager.Mode.SERVER
+	var dc := WorldData.new(88)
+	c.set_authority_data(dc, 88, Vector3.ZERO)
+	c.register_peer(1, "s")
+	var sy2 := dc.surface_y(3, 3)
+	c.set_peer_transform(1, Vector3(3, sy2 + 1, 3), 0.0)
+	check(bool(c.authorize_edit(1, 3, sy2 + 1, 3, 3).get("ok", false)), "原子段：编辑写入")
+	check(c.save_world(ap), "原子段：存盘成功")
+	check(not FileAccess.file_exists(ap + ".tmp"), "存盘后无 .tmp 残留（原子写）")
+	check(not FileAccess.file_exists(ap + ".bak1"), "首次存盘无备份（无旧档可备）")
+	var first_content := FileAccess.get_file_as_string(ap)
+	check(bool(c.authorize_edit(1, 3, sy2 + 2, 3, 3).get("ok", false)), "原子段：第二笔编辑")
+	check(c.save_world(ap), "第二次存盘成功")
+	check(FileAccess.file_exists(ap + ".bak1"), "第二次存盘轮转出 bak1")
+	check(FileAccess.get_file_as_string(ap + ".bak1") == first_content, "bak1 == 上一份存档内容")
+	for i in range(NetworkManager.BACKUP_EVERY):
+		c.save_world(ap)
+	check(FileAccess.file_exists(ap + ".bak2"), "持续存盘后轮转出 bak2")
+	# 主档写坏 → load_world 应从备份恢复（而不是返回 false 丢世界）
+	var fbad := FileAccess.open(ap, FileAccess.WRITE)
+	fbad.store_string("{corrupted!! not json")
+	fbad.close()
+	var r := NetworkManager.new()
+	r.mode = NetworkManager.Mode.SERVER
+	var dr := WorldData.new(88)
+	r.set_authority_data(dr, 88, Vector3.ZERO)
+	check(r.load_world(ap), "主档损坏 → 从备份恢复成功")
+	check(dr.get_block(3, sy2 + 1, 3) == 3, "恢复后编辑仍在")
+
 	if failed == 0: print("✅ ALL SERVER WORLD SAVE TESTS PASSED")
 	else: printerr("❌ ", failed, " 个服务器存档测试失败")
 	quit(0 if failed == 0 else 1)
