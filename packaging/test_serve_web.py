@@ -73,6 +73,7 @@ def main():
     os.environ["OW_AGENT_TOKEN_FILE"] = token_file
     os.environ["OW_PORTAL_RATE_MAX"] = "3"
     os.environ["OW_PORTAL_RATE_WINDOW"] = "600"
+    os.environ["OW_ADMIN_TOKEN"] = "admtest"   # token 管理端点用
 
     import serve_web
     importlib.reload(serve_web)  # 确保拿到当前 env 下的模块级常量（RATE_MAX 等）
@@ -208,6 +209,64 @@ def main():
 
         code, body, hs = _get_raw(base + "/api/agent-token")
         check(hs.get("Cache-Control", "") == "no-store", "/api responses stay no-store")
+
+        # ---------- /api/world/status（presence 心跳 → 居民"无人跳班"数据源）----------
+        pf = os.path.join(tmpdir, "presence.json")
+        os.environ["OW_PRESENCE_FILE"] = pf
+        code, raw, hs = _get_raw(base + "/api/world/status")
+        st = json.loads(raw)
+        check(code == 200 and st.get("online") is False, "presence 文件缺失 -> online:false")
+        with open(pf, "w", encoding="utf-8") as f:
+            json.dump({"humans": 2, "agents": 1, "t": int(time.time())}, f)
+        code, raw, hs = _get_raw(base + "/api/world/status")
+        st = json.loads(raw)
+        check(st.get("online") is True and st.get("humans") == 2 and st.get("agents") == 1,
+              "新鲜 presence -> online:true + 计数正确")
+        with open(pf, "w", encoding="utf-8") as f:
+            json.dump({"humans": 2, "agents": 1, "t": int(time.time()) - 300}, f)
+        code, raw, hs = _get_raw(base + "/api/world/status")
+        check(json.loads(raw).get("online") is False, "陈旧 presence(>60s) -> online:false（服务器多半没起）")
+
+        # ---------- Token 管理：列出 / 吊销（管理员口令网关）----------
+        # 前面的 429 用例故意耗尽了签发限频窗；v2 的管理网关与之共享限频（v3 才分离），
+        # 这里清掉计数并调大窗口预算，保证本节在两种版本下都按"口令对错"而非"限频"分支。
+        serve_web._RATE_HITS.clear()
+        serve_web.RATE_MAX = 100
+        code, raw, hs = _get_raw(base + "/api/tokens")
+        check(code == 403, "/api/tokens 无管理口令 -> 403")
+        code, raw, hs = _get_raw(base + "/api/tokens", {"X-OW-Admin": "admtest"})
+        listing = json.loads(raw).get("tokens", [])
+        check(code == 200 and len(listing) >= 5 and any(t["token"] == t2 for t in listing),
+              "/api/tokens 列出已签发 token（含 t2）")
+        # 吊销 t2 → 文件收缩 + 再吊销同一个 -> 404
+        serve_web._RATE_HITS.clear()
+        rq = urllib.request.Request(base + "/api/tokens/revoke", method="POST",
+                                    data=json.dumps({"token": t2}).encode("utf-8"),
+                                    headers={"X-OW-Admin": "admtest", "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(rq, timeout=5) as r:
+                rcode = r.status
+        except urllib.error.HTTPError as e:
+            rcode = e.code
+        check(rcode == 200, "吊销 t2 -> 200")
+        with open(token_file, "r", encoding="utf-8") as f:
+            after_revoke = json.load(f)["tokens"]
+        check(all(t["token"] != t2 for t in after_revoke), "吊销后 t2 已从文件移除（网关热加载将拒绝它）")
+        code, raw, hs = _get_raw(base + "/api/tokens", {"X-OW-Admin": "admtest"})
+        check(all(t["token"] != t2 for t in json.loads(raw).get("tokens", [])), "列表同步反映吊销")
+        rq2 = urllib.request.Request(base + "/api/tokens/revoke", method="POST",
+                                     data=json.dumps({"token": t2}).encode("utf-8"),
+                                     headers={"X-OW-Admin": "admtest", "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(rq2, timeout=5) as r:
+                code = r.status
+        except urllib.error.HTTPError as e:
+            code = e.code
+        check(code == 404, "重复吊销 -> 404 unknown token")
+
+        # /tokens 管理页
+        code, text, ctype = _get(base + "/tokens")
+        check(code == 200 and "Token" in text and "text/html" in ctype, "/tokens 返回管理页 HTML")
     finally:
         httpd.shutdown()
         httpd.server_close()

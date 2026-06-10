@@ -334,6 +334,71 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
                 return f
         return super().send_head()
 
+    # ---- 世界在线状态（公开只读）：读游戏服务器周期写的 presence 心跳文件 ----
+    # 居民班车据此"无人在线就跳班"省 LLM token；只含计数，无敏感信息，故不设防。
+    def _handle_world_status(self):
+        path = os.environ.get("OW_PRESENCE_FILE", "") or os.path.expanduser(
+            "~/Library/Application Support/Godot/app_userdata/OurWorlds/presence.json")
+        out = {"online": False, "humans": 0, "agents": 0, "age_sec": None}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                doc = json.load(f)
+            age = int(time.time()) - int(doc.get("t", 0))
+            out = {"online": age <= 60, "humans": int(doc.get("humans", 0)),
+                   "agents": int(doc.get("agents", 0)), "age_sec": age}
+        except (OSError, ValueError):
+            pass
+        self._send_json(200, out)
+
+    # ---- Token 管理（管理员）：列出 / 吊销已签发的接入 token ----
+    # 吊销 = 从 OW_AGENT_TOKEN_FILE 删除该记录；网关的 AgentTokenStore 按 mtime 热加载，几秒内失效。
+    def _handle_tokens_list(self):
+        if not self._admin_check():
+            return
+        toks = []
+        tf = os.environ.get("OW_AGENT_TOKEN_FILE", "")
+        if tf and os.path.isfile(tf):
+            try:
+                with open(tf, "r", encoding="utf-8") as f:
+                    doc = json.load(f)
+                for t in doc.get("tokens", []):
+                    toks.append({"token": str(t.get("token", "")), "label": str(t.get("label", "")),
+                                 "issued_at": int(t.get("issued_at", 0))})
+            except (OSError, ValueError):
+                pass
+        self._send_json(200, {"tokens": toks})
+
+    def _handle_token_revoke(self):
+        if not self._admin_check():
+            return
+        body = self._read_json_body()
+        if body is None:
+            self._send_json(400, {"error": "bad request"})
+            return
+        target = str(body.get("token", ""))
+        tf = os.environ.get("OW_AGENT_TOKEN_FILE", "")
+        if not target or not tf or not os.path.isfile(tf):
+            self._send_json(404, {"error": "unknown token"})
+            return
+        with _FILE_LOCK:
+            try:
+                with open(tf, "r", encoding="utf-8") as f:
+                    doc = json.load(f)
+            except (OSError, ValueError):
+                self._send_json(500, {"error": "token file unreadable"})
+                return
+            before = doc.get("tokens", [])
+            after = [t for t in before if str(t.get("token", "")) != target]
+            if len(after) == len(before):
+                self._send_json(404, {"error": "unknown token"})
+                return
+            doc["tokens"] = after
+            tmp = tf + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(doc, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, tf)
+        self._send_json(200, {"ok": True, "remaining": len(after)})
+
     # ---- 工具：发一段 body（已带 COOP/COEP/Cache-Control，经由 end_headers）----
     def _send_bytes(self, code: int, body: bytes, content_type: str):
         self.send_response(code)
@@ -366,6 +431,9 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
         if route in ("/agents", "/agents/", "/agents.html"):
             self._serve_portal_file("agents.html", "text/html; charset=utf-8")
             return True
+        if route in ("/tokens", "/tokens/", "/tokens.html"):
+            self._serve_portal_file("tokens.html", "text/html; charset=utf-8")
+            return True
         if route == "/install-agent.sh":
             self._serve_portal_file("install-agent.sh", "text/x-sh; charset=utf-8")
             return True
@@ -376,6 +444,12 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         route = self.path.split("?", 1)[0]
+        if route == "/api/world/status":
+            self._handle_world_status()
+            return
+        if route == "/api/tokens":
+            self._handle_tokens_list()
+            return
         if route == "/api/agents":
             self._handle_agents_list()
             return
@@ -398,6 +472,9 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         route = self.path.split("?", 1)[0]
+        if route == "/api/tokens/revoke":
+            self._handle_token_revoke()
+            return
         if route == "/api/agent-token":
             self._handle_agent_token()
             return
