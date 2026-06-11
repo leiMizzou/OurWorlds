@@ -2,14 +2,16 @@
 # Agent Control Panel 自检（standalone）—— 完全不触碰真实服务。
 #   - 把 serve_web.subprocess.run 换成桩：记录 argv、永不真正 launchctl 任何东西。
 #   - 发现目录指向临时目录里的假 plist（含一个必须被排除的 play-server 诱饵）。
-#   - 任务/日志目录也指向临时目录（OW_RESIDENT_TASK_DIR / OW_RESIDENT_LOG_DIR）。
+#   - 任务/日志/配置目录也指向临时目录（OW_RESIDENT_TASK_DIR / OW_RESIDENT_LOG_DIR /
+#     OW_RESIDENT_CONFIG_DIR）。
 #   - 覆盖（v1）：admin 关闭 -> 503；缺/错 token -> 403；GET /api/agents 只列 resident-*；
 #           start/stop/kick 拼出正确 argv 且仅接受白名单 label；
 #           注入式 / 非 resident label -> 404 且绝不触达 subprocess。
 #   - 覆盖（v2）：/api/agents 含 interval；/log 行数钳制 + 缺失=空；/task GET/写回 +
-#           >8192B=413 + 非 resident label 不写文件；/config interval 校验 +
-#           ThrottleInterval 真改 + 重载是 argv；stop-all/start-all 只动发现集合
-#           （play-server 诱饵不被触碰）；所有新端点 admin 关闭=503、错 token=403。
+#           >8192B=413 + 非 resident label 不写文件；/config 可读默认值、可保存 persona/
+#           runtime/avatar/goal；interval 校验 + ThrottleInterval 真改 + 重载是 argv；
+#           stop-all/start-all 只动发现集合（play-server 诱饵不被触碰）；
+#           所有新端点 admin 关闭=503、错 token=403。
 # 用法: python3 packaging/test_agent_control.py    （PASS/FAIL，失败 exit 非 0）
 import importlib
 import json
@@ -131,9 +133,11 @@ def main():
     la_dir = os.path.join(tmp, "LaunchAgents")
     task_dir = os.path.join(tmp, "tasks")
     log_dir = os.path.join(tmp, "logs")
+    config_dir = os.path.join(tmp, "configs")
     os.makedirs(la_dir)
     os.makedirs(task_dir)
     os.makedirs(log_dir)
+    os.makedirs(config_dir)
     _make_fake_launchagents(la_dir)
 
     FAKE_UID = "501"
@@ -144,9 +148,12 @@ def main():
     os.environ["OW_LAUNCHCTL_UID"] = FAKE_UID
     os.environ["OW_RESIDENT_TASK_DIR"] = task_dir
     os.environ["OW_RESIDENT_LOG_DIR"] = log_dir
+    os.environ["OW_RESIDENT_CONFIG_DIR"] = config_dir
     # 限频窗口给足，避免误判 429。
     os.environ["OW_PORTAL_RATE_MAX"] = "1000"
+    os.environ["OW_ADMIN_RATE_MAX"] = "1000"
     os.environ["OW_PORTAL_RATE_WINDOW"] = "600"
+    os.environ["OW_ADMIN_RATE_WINDOW"] = "600"
 
     import serve_web
     importlib.reload(serve_web)
@@ -183,6 +190,8 @@ def main():
         check(code == 503 and body.get("error") == "admin disabled", "admin disabled -> GET /log 503")
         code, body = _req("GET", base + "/api/agents/app.ourworlds.resident-codexbot/task")
         check(code == 503 and body.get("error") == "admin disabled", "admin disabled -> GET /task 503")
+        code, body = _req("GET", base + "/api/agents/app.ourworlds.resident-codexbot/config")
+        check(code == 503 and body.get("error") == "admin disabled", "admin disabled -> GET /config 503")
         code, body = _req("POST", base + "/api/agents/app.ourworlds.resident-codexbot/task",
                           body={"text": "x"})
         check(code == 503 and body.get("error") == "admin disabled", "admin disabled -> POST /task 503")
@@ -228,6 +237,8 @@ def main():
         check(code == 403, "wrong token -> GET /log 403")
         code, _ = _req("GET", base + "/api/agents/app.ourworlds.resident-codexbot/task", headers=W)
         check(code == 403, "wrong token -> GET /task 403")
+        code, _ = _req("GET", base + "/api/agents/app.ourworlds.resident-codexbot/config", headers=W)
+        check(code == 403, "wrong token -> GET /config 403")
         code, _ = _req("POST", base + "/api/agents/app.ourworlds.resident-codexbot/task",
                        headers=W, body={"text": "x"})
         check(code == 403, "wrong token -> POST /task 403")
@@ -265,6 +276,10 @@ def main():
         check(by["app.ourworlds.resident-codexbot"].get("interval") == 240 and
               by["app.ourworlds.resident-gardenbot"].get("interval") == 300,
               "GET /api/agents includes interval (ThrottleInterval) per agent")
+        check(by["app.ourworlds.resident-codexbot"].get("display_name") == "codexbot" and
+              by["app.ourworlds.resident-codexbot"].get("runtime") == "codex" and
+              by["app.ourworlds.resident-codexbot"].get("mode") == "explore",
+              "GET /api/agents includes default resident config summary")
 
         # ---- start：正确 argv = bootstrap gui/<uid> <plist> ----
         stub.calls.clear()
@@ -390,6 +405,61 @@ def main():
             ok_post = (code == 404)
             check(ok_get and ok_post, "non-whitelisted label (%s) -> /task 404" % bad)
         check(set(os.listdir(task_dir)) == before, "rejected /task labels wrote NO file")
+
+        # ---- GET /config：缺失配置文件 -> 默认配置（interval 来自 plist）----
+        code, body = _req("GET", base + "/api/agents/app.ourworlds.resident-gardenbot/config", headers=H)
+        cfg = body.get("config", {})
+        check(code == 200 and cfg.get("display_name") == "gardenbot" and
+              cfg.get("runtime") == "codex" and cfg.get("mode") == "explore" and
+              cfg.get("interval") == 300,
+              "GET /config missing file -> defaults + plist interval")
+
+        # ---- POST /config：保存完整配置；不含 interval 时不 reload ----
+        stub.calls.clear()
+        saved_cfg = {
+            "display_name": "Garden Keeper",
+            "runtime": "codex",
+            "mode": "build",
+            "model": "gpt-5",
+            "avatar": "builder",
+            "color": "#7ee0a0",
+            "goal": "Build a bridge by the river.",
+            "persona": "Keep the garden paths tidy and report progress.",
+        }
+        code, body = _req("POST", base + "/api/agents/app.ourworlds.resident-gardenbot/config",
+                          headers=H, body=saved_cfg)
+        cfg = body.get("config", {})
+        check(code == 200 and body.get("ok") is True and body.get("reloaded") is False,
+              "POST /config without interval -> saves config without launchctl reload")
+        check(cfg.get("display_name") == "Garden Keeper" and cfg.get("mode") == "build" and
+              cfg.get("goal") == "Build a bridge by the river.",
+              "POST /config echoes saved fields")
+        check(len([c for c in stub.calls if c[1] in ("bootout", "bootstrap")]) == 0,
+              "POST /config without interval did not touch launchctl")
+        cfg_path = os.path.join(config_dir, "gardenbot.json")
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            on_disk_cfg = json.load(f)
+        check(on_disk_cfg.get("display_name") == "Garden Keeper" and
+              on_disk_cfg.get("persona") == "Keep the garden paths tidy and report progress.",
+              "POST /config wrote the resident JSON file")
+        code, body = _req("GET", base + "/api/agents/app.ourworlds.resident-gardenbot/config", headers=H)
+        cfg = body.get("config", {})
+        check(code == 200 and cfg.get("display_name") == "Garden Keeper" and
+              cfg.get("avatar") == "builder" and cfg.get("color") == "#7ee0a0",
+              "GET /config round-trips saved config")
+        code, body = _req("GET", base + "/api/agents", headers=H)
+        by = {a["label"]: a for a in body.get("agents", [])}
+        check(by["app.ourworlds.resident-gardenbot"].get("display_name") == "Garden Keeper" and
+              by["app.ourworlds.resident-gardenbot"].get("mode") == "build",
+              "GET /api/agents reflects saved config summary")
+
+        # ---- POST /config：类型/格式校验 ----
+        code, body = _req("POST", base + "/api/agents/app.ourworlds.resident-gardenbot/config",
+                          headers=H, body={"color": "green"})
+        check(code == 400, "config invalid color -> 400")
+        code, body = _req("POST", base + "/api/agents/app.ourworlds.resident-gardenbot/config",
+                          headers=H, body={"display_name": 123})
+        check(code == 400, "config non-string display_name -> 400")
 
         # ---- POST /config：interval 校验（拒 5、拒 999999、收 240）----
         stub.calls.clear()

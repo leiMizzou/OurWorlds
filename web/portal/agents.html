@@ -25,8 +25,10 @@
   .step{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;margin:16px 0}
   .step h2{margin:0 0 12px;font-size:16px;display:flex;align-items:center;gap:9px}
   label.fld{display:block;margin:0 0 4px;color:var(--muted);font-size:13px}
-  input[type=password]{width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+  input[type=password],input[type=text],select{width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);
     border-radius:9px;padding:10px 12px;font-size:14px;font-family:inherit}
+  input[type=color]{width:54px;height:39px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:9px;padding:4px;cursor:pointer}
   input:focus{outline:none;border-color:var(--accent)}
   .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
   .row>div{flex:1;min-width:180px}
@@ -65,6 +67,12 @@
     border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:13px;
     font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
   textarea.task:focus{outline:none;border-color:var(--accent)}
+  .cfggrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:8px}
+  .cfggrid .wide{grid-column:1/-1}
+  .cfggrid label{display:block;margin:0 0 4px;color:var(--muted);font-size:12px}
+  .colorrow{display:flex;align-items:center;gap:10px}
+  .swatch{width:20px;height:20px;border-radius:5px;border:1px solid var(--line);background:var(--accent)}
+  @media (max-width:620px){.cfggrid{grid-template-columns:1fr}.cfggrid .wide{grid-column:auto}}
   input.num{width:110px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);
     border-radius:9px;padding:8px 11px;font-size:14px;font-family:inherit}
   input.num:focus{outline:none;border-color:var(--accent)}
@@ -170,14 +178,28 @@ const T = {
   startall:{zh:"全部启动", en:"Start All"},
   confirm_stopall:{zh:"确定停止全部常驻 agent？", en:"Stop ALL resident agents?"},
   confirm_startall:{zh:"确定启动全部常驻 agent？", en:"Start ALL resident agents?"},
-  more:{zh:"展开详情（日志 / 任务 / 节律）", en:"Expand (log / task / cadence)"},
+  more:{zh:"展开详情（日志 / 配置 / 任务 / 节律）", en:"Expand (log / config / task / cadence)"},
   h_log:{zh:"日志", en:"Log"},
+  h_config:{zh:"配置", en:"Config"},
   h_task:{zh:"任务", en:"Task"},
   h_cadence:{zh:"节律", en:"Cadence"},
   refreshlog:{zh:"刷新日志", en:"Refresh log"},
   logempty:{zh:"（暂无日志）", en:"(no log yet)"},
   loglast:{zh:"最后约 40 行", en:"last ~40 lines"},
+  cfg_note:{zh:"保存到 ~/.ourworlds/agents/<name>.json；常驻脚本下一轮读取。", en:"Saved to ~/.ourworlds/agents/<name>.json; resident runners read it next shift."},
+  cfg_name:{zh:"显示名", en:"Display name"},
+  cfg_runtime:{zh:"运行时", en:"Runtime"},
+  cfg_mode:{zh:"模式", en:"Mode"},
+  cfg_model:{zh:"模型", en:"Model"},
+  cfg_avatar:{zh:"Avatar", en:"Avatar"},
+  cfg_color:{zh:"颜色", en:"Color"},
+  cfg_goal:{zh:"目标", en:"Goal"},
+  cfg_persona:{zh:"人设 / 系统提示", en:"Persona / system prompt"},
+  mode_explore:{zh:"探索", en:"Explore"},
+  mode_build:{zh:"建造", en:"Build"},
+  mode_custom:{zh:"自定义", en:"Custom"},
   save:{zh:"保存", en:"Save"},
+  savecfg:{zh:"保存配置", en:"Save config"},
   saved:{zh:"已保存 ✓", en:"Saved ✓"},
   task_note:{zh:"下一班生效 / applies next shift", en:"applies next shift / 下一班生效"},
   apply:{zh:"应用", en:"Apply"},
@@ -359,6 +381,58 @@ async function saveTask(label, taEl, msgEl){
   }
 }
 
+async function loadConfig(label, f, msgEl){
+  if(!adminToken) return;
+  setSub(msgEl, tr("loading"), "muted");
+  let r;
+  try{ r = await api("GET", "/api/agents/" + encodeURIComponent(label) + "/config", false); }
+  catch(e){ setSub(msgEl, tr("conn_neterr"), "err"); return; }
+  if(!r.ok){
+    const k = errKeyFor(r.status);
+    setSub(msgEl, k ? tr("act_"+k) : (tr("act_fail")+"HTTP "+r.status), "err");
+    return;
+  }
+  const data = await r.json();
+  const c = data.config || {};
+  f.display_name.value = c.display_name || c.id || "";
+  f.runtime.value = c.runtime || "codex";
+  f.mode.value = c.mode || "explore";
+  f.model.value = c.model || "";
+  f.avatar.value = c.avatar || "default";
+  f.color.value = /^#[0-9a-fA-F]{6}$/.test(c.color || "") ? c.color : "#5db0ff";
+  f.swatch.style.background = f.color.value;
+  f.goal.value = c.goal || "";
+  f.persona.value = c.persona || "";
+  setSub(msgEl, "", "");
+}
+
+async function saveConfig(label, f, msgEl){
+  if(busy || !adminToken) return;
+  busy = true;
+  setSub(msgEl, tr("saving"), "muted");
+  const body = {
+    display_name: f.display_name.value,
+    runtime: f.runtime.value,
+    mode: f.mode.value,
+    model: f.model.value,
+    avatar: f.avatar.value,
+    color: f.color.value,
+    goal: f.goal.value,
+    persona: f.persona.value
+  };
+  let r;
+  try{ r = await api("POST", "/api/agents/" + encodeURIComponent(label) + "/config", body); }
+  catch(e){ busy=false; setSub(msgEl, tr("conn_neterr"), "err"); return; }
+  busy = false;
+  if(!r.ok){
+    const k = errKeyFor(r.status);
+    setSub(msgEl, k ? tr("act_"+k) : (tr("act_fail")+"HTTP "+r.status), "err");
+  } else {
+    setSub(msgEl, tr("saved"), "ok");
+    refresh();
+  }
+}
+
 async function applyCadence(label, inEl, msgEl){
   if(busy || !adminToken) return;
   const n = parseInt(inEl.value, 10);
@@ -405,11 +479,13 @@ function renderList(agents){
     const info = document.createElement("div");
     info.className = "ainfo";
     const nm = document.createElement("div");
-    nm.className = "aname"; nm.textContent = a.name || a.label;
+    nm.className = "aname"; nm.textContent = a.display_name || a.name || a.label;
     const st = document.createElement("div");
     st.className = "astat";
     let stTxt = a.running ? tr("st_running") : (a.loaded ? tr("st_idle") : tr("st_stopped"));
     if(a.interval != null){ stTxt += " · " + a.interval + "s"; }
+    const meta = [a.runtime, a.mode].filter(Boolean).join(" / ");
+    if(meta){ stTxt += " · " + meta; }
     st.textContent = stTxt;
     info.appendChild(nm); info.appendChild(st);
     row.appendChild(info);
@@ -464,6 +540,70 @@ function buildPanel(a){
   refLog.onclick = () => loadLog(a.label, pre, logMsg);
   logRow.appendChild(refLog);
   panel.appendChild(logRow); panel.appendChild(pre); panel.appendChild(logMsg);
+
+  // --- 配置 ---
+  const hCfg = document.createElement("h3"); hCfg.textContent = tr("h_config");
+  panel.appendChild(hCfg);
+  const cfgNote = document.createElement("div"); cfgNote.className = "note";
+  cfgNote.textContent = tr("cfg_note");
+  panel.appendChild(cfgNote);
+  const cfgMsg = document.createElement("div"); cfgMsg.className = "submsg";
+  const grid = document.createElement("div"); grid.className = "cfggrid";
+  const fields = {};
+  function cell(labelKey, el, wide){
+    const wrap = document.createElement("div");
+    if(wide) wrap.className = "wide";
+    const lab = document.createElement("label");
+    lab.textContent = tr(labelKey);
+    wrap.appendChild(lab);
+    wrap.appendChild(el);
+    grid.appendChild(wrap);
+  }
+  fields.display_name = document.createElement("input");
+  fields.display_name.type = "text";
+  cell("cfg_name", fields.display_name, false);
+  fields.runtime = document.createElement("select");
+  ["codex","claude","hermes","generic","custom"].forEach(v => {
+    const o = document.createElement("option"); o.value = v; o.textContent = v;
+    fields.runtime.appendChild(o);
+  });
+  cell("cfg_runtime", fields.runtime, false);
+  fields.mode = document.createElement("select");
+  [["explore","mode_explore"],["build","mode_build"],["custom","mode_custom"]].forEach(pair => {
+    const o = document.createElement("option"); o.value = pair[0]; o.textContent = tr(pair[1]);
+    fields.mode.appendChild(o);
+  });
+  cell("cfg_mode", fields.mode, false);
+  fields.model = document.createElement("input");
+  fields.model.type = "text"; fields.model.placeholder = "gpt-5";
+  cell("cfg_model", fields.model, false);
+  fields.avatar = document.createElement("select");
+  ["default","explorer","builder","curator","scout"].forEach(v => {
+    const o = document.createElement("option"); o.value = v; o.textContent = v;
+    fields.avatar.appendChild(o);
+  });
+  cell("cfg_avatar", fields.avatar, false);
+  const colorBox = document.createElement("div"); colorBox.className = "colorrow";
+  fields.color = document.createElement("input");
+  fields.color.type = "color"; fields.color.value = "#5db0ff";
+  fields.swatch = document.createElement("span"); fields.swatch.className = "swatch";
+  fields.color.oninput = () => { fields.swatch.style.background = fields.color.value; };
+  colorBox.appendChild(fields.color); colorBox.appendChild(fields.swatch);
+  cell("cfg_color", colorBox, false);
+  fields.goal = document.createElement("textarea");
+  fields.goal.className = "task"; fields.goal.style.minHeight = "68px"; fields.goal.spellcheck = false;
+  cell("cfg_goal", fields.goal, true);
+  fields.persona = document.createElement("textarea");
+  fields.persona.className = "task"; fields.persona.style.minHeight = "118px"; fields.persona.spellcheck = false;
+  cell("cfg_persona", fields.persona, true);
+  panel.appendChild(grid);
+  const cfgRow = document.createElement("div"); cfgRow.className = "subrow";
+  const cfgSave = document.createElement("button");
+  cfgSave.className = "btn"; cfgSave.textContent = tr("savecfg");
+  cfgSave.onclick = () => saveConfig(a.label, fields, cfgMsg);
+  cfgRow.appendChild(cfgSave);
+  panel.appendChild(cfgRow); panel.appendChild(cfgMsg);
+  loadConfig(a.label, fields, cfgMsg);
 
   // --- 任务 ---
   const hTask = document.createElement("h3"); hTask.textContent = tr("h_task");

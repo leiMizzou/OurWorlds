@@ -18,7 +18,8 @@
 #   GET  /api/agents/<label>/log?lines=N  -> 读取该 agent 日志最后 N 行（只读；缺失=空）
 #   GET  /api/agents/<label>/task         -> 读取该 agent 任务文件（缺失=空串）
 #   POST /api/agents/<label>/task         -> 写任务文件（原子写；>8192B=413）下一班生效
-#   POST /api/agents/<label>/config       -> 改 plist 的 ThrottleInterval 并重载（重载生效）
+#   GET  /api/agents/<label>/config       -> 读取该 agent 的持久化配置（缺失=默认值）
+#   POST /api/agents/<label>/config       -> 保存配置；若含 interval 则改 plist 的 ThrottleInterval 并重载
 #   POST /api/agents/stop-all             -> bootout 所有发现到的常驻（只动白名单集合）
 #   POST /api/agents/start-all            -> bootstrap 所有发现到的常驻（只动白名单集合）
 # 端点配置（环境变量）：
@@ -29,6 +30,8 @@
 #   OW_LAUNCHCTL_UID      launchctl 域 uid（默认 os.getuid()；仅供测试覆盖）
 #   OW_RESIDENT_TASK_DIR  任务文件目录（默认 ~/.ourworlds；仅供测试覆盖）
 #   OW_RESIDENT_LOG_DIR   日志文件目录（默认 ~/Library/Logs/ourworlds；仅供测试覆盖）
+#   OW_RESIDENT_CONFIG_DIR 配置目录（默认 ~/.ourworlds/agents；仅供测试覆盖）
+#   OW_ADMIN_RATE_MAX / OW_ADMIN_RATE_WINDOW 管理 API 独立限频（默认 120 次 / 60 秒）
 # 其余一切仍是 build/web 的静态文件服务，未改动。
 import email.utils
 import glob
@@ -52,11 +55,15 @@ PORTAL_DIR = os.path.normpath(os.path.join(BASE_DIR, "..", "web", "portal"))
 # ---- 限频：每个客户端 IP 在窗口内最多签发 N 个 token ----
 RATE_MAX = int(os.environ.get("OW_PORTAL_RATE_MAX", "5"))          # 每 IP 每窗口最多签发数
 RATE_WINDOW_SEC = int(os.environ.get("OW_PORTAL_RATE_WINDOW", "600"))  # 窗口长度（秒），默认 10 分钟
+ADMIN_RATE_MAX = int(os.environ.get("OW_ADMIN_RATE_MAX", "120"))       # 管理 API：每 IP 每窗口最多请求数
+ADMIN_RATE_WINDOW_SEC = int(os.environ.get("OW_ADMIN_RATE_WINDOW", "60"))
 LABEL_MAX = 40
+CONFIG_MAX_BYTES = 16384
 
 # token 文件读改写需串行（ThreadingTCPServer 并发）；限频表同锁保护。
 _FILE_LOCK = threading.Lock()
 _RATE_HITS = {}   # ip -> [unix_ts, ...]（窗口内的签发时刻）
+_ADMIN_RATE_HITS = {}   # ip -> [unix_ts, ...]（管理 API 请求时刻）
 
 
 def _gate() -> str:
@@ -132,6 +139,20 @@ def _rate_limited(ip: str) -> bool:
         return False
 
 
+def _admin_rate_limited(ip: str) -> bool:
+    """管理 API 独立限频，避免和 /api/agent-token 的签发限频互相干扰。"""
+    now = time.time()
+    cutoff = now - ADMIN_RATE_WINDOW_SEC
+    with _FILE_LOCK:
+        hits = [t for t in _ADMIN_RATE_HITS.get(ip, []) if t >= cutoff]
+        if len(hits) >= ADMIN_RATE_MAX:
+            _ADMIN_RATE_HITS[ip] = hits
+            return True
+        hits.append(now)
+        _ADMIN_RATE_HITS[ip] = hits
+        return False
+
+
 # ============================================================================
 # Agent Control Panel —— 管理面板：启停常驻 agent（launchd user-agents）。
 # 安全要点：
@@ -193,6 +214,14 @@ def _log_dir() -> str:
     return os.path.expanduser("~/Library/Logs/ourworlds")
 
 
+def _config_dir() -> str:
+    # Agent 配置目录，默认 ~/.ourworlds/agents；OW_RESIDENT_CONFIG_DIR 仅供测试覆盖。
+    override = os.environ.get("OW_RESIDENT_CONFIG_DIR", "").strip()
+    if override:
+        return override
+    return os.path.expanduser("~/.ourworlds/agents")
+
+
 def _name_of(label: str) -> str:
     """从已白名单化的 label 取出 <name>（去掉 resident- 前缀）。
 
@@ -213,6 +242,10 @@ def _log_path(label: str) -> str:
     return os.path.join(_log_dir(), "resident-%s.log" % _name_of(label))
 
 
+def _config_path(label: str) -> str:
+    return os.path.join(_config_dir(), "%s.json" % _name_of(label))
+
+
 def _read_interval(plist_path: str):
     """从 plist 读取 ThrottleInterval（int）；缺失/不可读 => None。"""
     try:
@@ -222,6 +255,143 @@ def _read_interval(plist_path: str):
         return int(val) if isinstance(val, int) else None
     except Exception:
         return None
+
+
+def _text_field(v, max_len: int) -> str:
+    s = "" if v is None else str(v)
+    s = s.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if len(s.encode("utf-8")) > max_len:
+        raise ValueError("field too large")
+    return s
+
+
+def _default_agent_config(label: str, plist_path: str = None) -> dict:
+    name = _name_of(label)
+    interval = _read_interval(plist_path) if plist_path else None
+    return {
+        "version": 1,
+        "id": name,
+        "label": label,
+        "display_name": name,
+        "runtime": "codex",
+        "mode": "explore",
+        "model": "",
+        "avatar": "default",
+        "color": "#5db0ff",
+        "goal": "",
+        "persona": "",
+        "interval": interval,
+    }
+
+
+def _read_agent_config(label: str, plist_path: str = None) -> dict:
+    """读取 resident 配置；缺失/畸形时返回默认值，interval 始终以 plist 为准。"""
+    cfg = _default_agent_config(label, plist_path)
+    path = _config_path(label)
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                for k, limit in [
+                    ("display_name", 80),
+                    ("runtime", 40),
+                    ("mode", 32),
+                    ("model", 120),
+                    ("avatar", 40),
+                    ("color", 16),
+                    ("goal", 1000),
+                    ("persona", CONFIG_MAX_BYTES),
+                ]:
+                    if k in raw and isinstance(raw.get(k), str):
+                        cfg[k] = _text_field(raw.get(k), limit)
+        except Exception:
+            pass
+    cfg["version"] = 1
+    cfg["id"] = _name_of(label)
+    cfg["label"] = label
+    cfg["interval"] = _read_interval(plist_path) if plist_path else None
+    if not cfg["display_name"]:
+        cfg["display_name"] = cfg["id"]
+    if not re.match(r"^#[0-9a-fA-F]{6}$", str(cfg.get("color", ""))):
+        cfg["color"] = "#5db0ff"
+    return cfg
+
+
+def _validate_agent_config_payload(label: str, plist_path: str, body: dict) -> dict:
+    """合并并校验 POST /config 的 payload；字段缺省表示保留当前配置。"""
+    try:
+        raw_size = len(json.dumps(body, ensure_ascii=False).encode("utf-8"))
+    except Exception:
+        raw_size = CONFIG_MAX_BYTES + 1
+    if raw_size > CONFIG_MAX_BYTES:
+        raise ValueError("config too large")
+
+    cfg = _read_agent_config(label, plist_path)
+    aliases = {"name": "display_name"}
+    limits = {
+        "display_name": 80,
+        "runtime": 40,
+        "mode": 32,
+        "model": 120,
+        "avatar": 40,
+        "color": 16,
+        "goal": 1000,
+        "persona": CONFIG_MAX_BYTES,
+    }
+    for src, dst in aliases.items():
+        if src in body and dst not in body:
+            body[dst] = body[src]
+    for k, limit in limits.items():
+        if k not in body:
+            continue
+        if not isinstance(body.get(k), str):
+            raise ValueError("%s must be a string" % k)
+        cfg[k] = _text_field(body.get(k), limit)
+    if not cfg["display_name"]:
+        cfg["display_name"] = cfg["id"]
+    if not re.match(r"^#[0-9a-fA-F]{6}$", cfg["color"]):
+        raise ValueError("color must be #RRGGBB")
+    for k in ("runtime", "mode", "avatar"):
+        if cfg[k] and not re.match(r"^[A-Za-z0-9_. -]+$", cfg[k]):
+            raise ValueError("%s has unsupported characters" % k)
+    if "interval" in body:
+        interval = body.get("interval")
+        if isinstance(interval, bool) or not isinstance(interval, int):
+            raise ValueError("interval must be an integer")
+        if interval < 30 or interval > 86400:
+            raise ValueError("interval out of range (30..86400)")
+        cfg["interval"] = interval
+    return cfg
+
+
+def _write_agent_config(label: str, cfg: dict):
+    path = _config_path(label)
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent, exist_ok=True)
+    body = {
+        "version": 1,
+        "id": cfg.get("id", _name_of(label)),
+        "label": label,
+        "display_name": cfg.get("display_name", _name_of(label)),
+        "runtime": cfg.get("runtime", "codex"),
+        "mode": cfg.get("mode", "explore"),
+        "model": cfg.get("model", ""),
+        "avatar": cfg.get("avatar", "default"),
+        "color": cfg.get("color", "#5db0ff"),
+        "goal": cfg.get("goal", ""),
+        "persona": cfg.get("persona", ""),
+        "interval": cfg.get("interval"),
+    }
+    tmp = path + ".tmp"
+    with _FILE_LOCK:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(body, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
 
 
 def _discover_residents() -> dict:
@@ -461,6 +631,10 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
         if m:
             self._handle_agent_task_get(m.group(1))
             return
+        m = re.match(r"^/api/agents/([^/]+)/config$", route)
+        if m:
+            self._handle_agent_config_get(m.group(1))
+            return
         if self._portal_get():
             return
         super().do_GET()
@@ -528,7 +702,7 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
             self._send_json(403, {"error": "forbidden"})
             return False
         ip = self.client_address[0] if self.client_address else "unknown"
-        if _rate_limited(ip):
+        if _admin_rate_limited(ip):
             self._send_json(429, {"error": "rate limited, try later"})
             return False
         return True
@@ -540,9 +714,16 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
             agents = []
             for label, path in _discover_residents().items():
                 running, loaded = _agent_running(label)
+                cfg = _read_agent_config(label, path)
                 agents.append({
                     "label": label,
                     "name": label[len(RESIDENT_PREFIX):],
+                    "display_name": cfg.get("display_name", label[len(RESIDENT_PREFIX):]),
+                    "runtime": cfg.get("runtime", "codex"),
+                    "mode": cfg.get("mode", "explore"),
+                    "avatar": cfg.get("avatar", "default"),
+                    "color": cfg.get("color", "#5db0ff"),
+                    "goal": cfg.get("goal", ""),
                     "running": running,
                     "loaded": loaded,
                     "interval": _read_interval(path),
@@ -703,8 +884,25 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
             except Exception:
                 pass
 
+    def _handle_agent_config_get(self, raw_label):
+        """GET /api/agents/<label>/config —— 返回持久化配置；缺失时返回默认配置。"""
+        try:
+            if not self._admin_check():
+                return
+            plist = _resolve_resident(raw_label)
+            if not plist:
+                self._send_json(404, {"error": "unknown agent"})
+                return
+            label = str(raw_label)
+            self._send_json(200, {"config": _read_agent_config(label, plist)})
+        except Exception:
+            try:
+                self._send_json(500, {"error": "internal error"})
+            except Exception:
+                pass
+
     def _handle_agent_config(self, raw_label):
-        """POST /api/agents/<label>/config body {"interval": int} —— 改 ThrottleInterval 并重载。"""
+        """POST /api/agents/<label>/config —— 保存配置；interval 变更会同步 plist 并重载。"""
         try:
             body = self._read_json_body()
             if body is None:
@@ -717,41 +915,58 @@ class CrossOriginIsolatedHandler(http.server.SimpleHTTPRequestHandler):
                 self._send_json(404, {"error": "unknown agent"})
                 return
             label = str(raw_label)
-            interval = body.get("interval")
-            # 校验 int（拒绝 bool / 非整数 / 越界），区间 [30, 86400]。
-            if isinstance(interval, bool) or not isinstance(interval, int):
-                self._send_json(400, {"error": "interval must be an integer"})
-                return
-            if interval < 30 or interval > 86400:
-                self._send_json(400, {"error": "interval out of range (30..86400)"})
-                return
-            # 读改写 plist（原子）：plistlib.load -> set ThrottleInterval -> plistlib.dump。
             try:
-                with _FILE_LOCK:
-                    with open(plist, "rb") as f:
-                        data = plistlib.load(f)
-                    if not isinstance(data, dict):
-                        data = {}
-                    data["ThrottleInterval"] = interval
-                    tmp = plist + ".tmp"
-                    with open(tmp, "wb") as f:
-                        plistlib.dump(data, f)
-                        f.flush()
-                        os.fsync(f.fileno())
-                    os.replace(tmp, plist)
-            except Exception:
-                self._send_json(500, {"error": "failed to write plist"})
+                cfg = _validate_agent_config_payload(label, plist, body)
+            except ValueError as e:
+                self._send_json(400, {"error": str(e)})
                 return
-            # 重载以使新 cadence 生效：bootout 再 bootstrap（argv，绝不经 shell）。
-            uid = _launch_uid()
+
+            reloaded = False
+            rc = 0
+            # interval 仍以 launchd plist 为运行时来源；只要请求里包含 interval，就保持旧行为：写 plist 并重载。
+            if "interval" in body:
+                interval = int(cfg.get("interval"))
+                try:
+                    with _FILE_LOCK:
+                        with open(plist, "rb") as f:
+                            data = plistlib.load(f)
+                        if not isinstance(data, dict):
+                            data = {}
+                        data["ThrottleInterval"] = interval
+                        tmp = plist + ".tmp"
+                        with open(tmp, "wb") as f:
+                            plistlib.dump(data, f)
+                            f.flush()
+                            os.fsync(f.fileno())
+                        os.replace(tmp, plist)
+                except Exception:
+                    self._send_json(500, {"error": "failed to write plist"})
+                    return
+                uid = _launch_uid()
+                try:
+                    _run_launchctl(["bootout", "gui/%d/%s" % (uid, label)])
+                    cp = _run_launchctl(["bootstrap", "gui/%d" % uid, plist])
+                    rc = cp.returncode
+                    reloaded = True
+                except Exception:
+                    self._send_json(502, {"error": "launchctl reload failed"})
+                    return
+
+            cfg["interval"] = _read_interval(plist)
             try:
-                _run_launchctl(["bootout", "gui/%d/%s" % (uid, label)])
-                cp = _run_launchctl(["bootstrap", "gui/%d" % uid, plist])
+                _write_agent_config(label, cfg)
             except Exception:
-                self._send_json(502, {"error": "launchctl reload failed"})
+                self._send_json(500, {"error": "failed to write config"})
                 return
-            resp = {"ok": True, "interval": interval, "label": label, "rc": cp.returncode}
-            if cp.returncode != 0:
+            resp = {
+                "ok": True,
+                "interval": cfg.get("interval"),
+                "label": label,
+                "config": cfg,
+                "reloaded": reloaded,
+                "rc": rc,
+            }
+            if reloaded and rc != 0:
                 detail = (cp.stderr or cp.stdout or "").strip()
                 if detail:
                     resp["detail"] = detail[:200]
