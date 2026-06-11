@@ -142,6 +142,8 @@ func _ready() -> void:
 	var _locale := get_node_or_null("/root/Locale")
 	if _locale != null:
 		_locale.init(str(_settings.get("language", "")))
+		if _locale.has_signal("language_changed") and not _locale.language_changed.is_connected(_on_language_changed):
+			_locale.language_changed.connect(_on_language_changed)
 	_graphics_quality = _sanitize_graphics_quality(str(_settings.get("graphics_quality", "balanced")))
 	lib = BlockLibrary.new()
 	_setup_environment()
@@ -1060,9 +1062,9 @@ func _show_screenshot_feedback(ok: bool, path: String) -> void:
 	if hud == null:
 		return
 	var kind := "save" if ok else "blocked"
-	var label := "当前渲染驱动无法截图"
+	var label := _t("TOAST_SCREENSHOT_UNAVAILABLE")
 	if ok:
-		label = "截图已保存：" + path.get_file()
+		label = _t("TOAST_SCREENSHOT_SAVED") % path.get_file()
 	if not hud.visible:
 		if _photo_mode:
 			_pending_photo_feedback_kind = kind
@@ -1146,11 +1148,9 @@ func _journal_data() -> Dictionary:
 			region_detail = world.region_description(int(floor(player_pos.x)), int(floor(player_pos.z)))
 	elif world != null and player != null and world.has_method("region_description"):
 		region_detail = world.region_description(int(floor(player_pos.x)), int(floor(player_pos.z)))
-	# 注：save_status 是被「未迁移」的旅行手记/地图面板共享读取的数据，保持中文以免那些
-	# 面板出现中英混排；暂停菜单摘要（已迁移）在 _pause_summary_data() 里改用本地化版本。
-	var save_status := "本地会话"
+	var save_status := _t("SAVE_LOCAL_SESSION")
 	if world != null and world.save_path != "":
-		save_status = "有改动" if world.has_unsaved_changes() else "已保存"
+		save_status = _t("SAVE_UNSAVED") if world.has_unsaved_changes() else _t("SAVE_SAVED")
 	var landmarks := []
 	if discovery_tracker != null and discovery_tracker.has_method("discovered_entries"):
 		landmarks = _landmarks_with_navigation(discovery_tracker.discovered_entries())
@@ -1159,9 +1159,9 @@ func _journal_data() -> Dictionary:
 	return {
 		"world_name": WorldCatalog.world_name(_current_seed),
 		"seed": _current_seed,
-		"region": region if region != "" else "未知区域",
+		"region": region if region != "" else _t("REGION_UNKNOWN"),
 		"region_detail": region_detail,
-		"weather": weather_system.weather_label() if weather_system != null else "晴朗",
+		"weather": weather_system.weather_label() if weather_system != null else _t("WEATHER_CLEAR"),
 		"save_status": save_status,
 		"edit_count": world.edit_count() if world != null else 0,
 		"journey_steps": world.journey_steps() if world != null else [],
@@ -1219,7 +1219,7 @@ func _restoration_target_data(landmarks: Array) -> Dictionary:
 			"key": String(target.get("key", "")),
 			"label": String(target.get("label", _t("LANDMARK_FALLBACK"))),
 			"restore_percent": int(target.get("restore_percent", 0)),
-			"restore_label": String(target.get("restore_label", "待修复")),
+			"restore_label": String(target.get("restore_label", _t("JOURNAL_TARGET_TODO"))),
 			"restore_complete": _landmark_entry_complete(target),
 			"archive": String(target.get("archive", "")),
 			"distance": int(target.get("distance", _flat_distance_to_player(pos))),
@@ -1263,7 +1263,6 @@ func _open_pause_menu() -> void:
 
 func _pause_summary_data() -> Dictionary:
 	var data := _journal_data()
-	# 暂停菜单摘要已迁移到 Locale：把存档状态换成本地化文案（手记/地图仍读 _journal_data 的中文）。
 	if world != null and world.save_path != "":
 		data["save_status"] = _t("SAVE_UNSAVED") if world.has_unsaved_changes() else _t("SAVE_SAVED")
 	else:
@@ -1483,14 +1482,14 @@ func _flush_repair_feedback() -> void:
 	var label := String(best.get("label", _t("LANDMARK_FALLBACK")))
 	var feedback_label := ""
 	if bool(best.get("restore_complete", false)):
-		feedback_label = "遗迹修复完成：" + label
+		feedback_label = _t("TOAST_LANDMARK_RESTORED") % label
 		hud.show_feedback("journey", feedback_label)
 		if audio_feedback != null:
 			audio_feedback.play_feedback("journey", feedback_label)
 		if action_effects != null and action_effects.has_method("show_restoration"):
 			action_effects.show_restoration(Vector3(_landmark_entry_pos(best)) + Vector3(0.5, 0.5, 0.5))
 	else:
-		feedback_label = "遗迹修复 %d%%：%s" % [best_percent, label]
+		feedback_label = _t("TOAST_LANDMARK_PROGRESS") % [best_percent, label]
 		hud.show_feedback("journey", feedback_label)
 		if audio_feedback != null:
 			audio_feedback.play_feedback("journey", feedback_label)
@@ -1562,7 +1561,7 @@ func _complete_journey_step(key: String, show_feedback: bool = true) -> void:
 		return
 	_sync_hud_journey()
 	if show_feedback and hud != null and not _title_active:
-		var label := "旅程完成：" + _journey_label(key)
+		var label := _t("TOAST_JOURNEY_COMPLETE") % _journey_label(key)
 		hud.show_feedback("journey", label)
 		if audio_feedback != null:
 			audio_feedback.play_feedback("journey", label)
@@ -1658,8 +1657,11 @@ func _sync_hud_region(show_feedback: bool = true) -> void:
 	if label != _last_region_label:
 		_last_region_label = label
 		if show_feedback and not _title_active:
-			var prefix := "发现新地貌" if first_visit else "进入"
-			var feedback := "%s%s：%s" % [prefix, label, detail] if detail != "" else prefix + label
+			var feedback := ""
+			if first_visit:
+				feedback = (_t("TOAST_REGION_DISCOVERED_DETAIL") % [label, detail]) if detail != "" else (_t("TOAST_REGION_DISCOVERED") % label)
+			else:
+				feedback = (_t("TOAST_REGION_ENTER_DETAIL") % [label, detail]) if detail != "" else (_t("TOAST_REGION_ENTER") % label)
 			hud.show_feedback("region", feedback)
 
 func _home_distance() -> int:
@@ -1728,6 +1730,21 @@ func _loc() -> Node:
 func _t(key: String) -> String:
 	var l := _loc()
 	return l.t(key) if l != null else key
+
+func _on_language_changed() -> void:
+	if hud != null:
+		_sync_hud_save_state()
+		if weather_system != null:
+			hud.set_weather_label(weather_system.weather_label())
+		if _last_region_label != "":
+			hud.set_region_label(_last_region_label)
+		_sync_hud_restoration()
+	if _journal_active and travel_journal != null:
+		travel_journal.open(_journal_data())
+	if _map_active and world_map != null:
+		world_map.open(_map_data())
+	if pause_menu != null and pause_menu.visible and not _title_settings_active:
+		pause_menu.set_world_summary(_pause_summary_data())
 
 func _apply_graphics_quality(value: String) -> void:
 	_graphics_quality = _sanitize_graphics_quality(value)

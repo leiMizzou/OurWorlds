@@ -254,11 +254,12 @@ func _pattern_for_feedback(kind: String, label: String = "") -> Array:
 		"bulk_place":
 			return [[164.0, 0.060, 0.30, "thud"], [246.0, 0.074, 0.24, "thud"], [392.0, 0.092, 0.18]]
 		"weather":
-			if label.contains("雨"):
+			var lower := label.to_lower()
+			if label.contains("雨") or lower.contains("rain") or lower.contains("drizzle"):
 				return [[310.0, 0.050, 0.18], [246.0, 0.070, 0.14]]
-			if label.contains("雪"):
+			if label.contains("雪") or lower.contains("snow"):
 				return [[740.0, 0.055, 0.16], [988.0, 0.075, 0.13]]
-			if label.contains("关闭"):
+			if label.contains("关闭") or lower.contains("off"):
 				return [[220.0, 0.045, 0.14]]
 			return [[520.0, 0.040, 0.13]]
 		"blocked":

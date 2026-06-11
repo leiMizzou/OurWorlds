@@ -66,10 +66,30 @@ var _results := []           # 后台线程压入的成品 {cc, ver, arrays}  �
 var _tasks := {}             # task_id -> true，所有在途的 WorkerThreadPool 任务（退出时排空）—— 用 _mutex 保护
 var _max_inflight := MAX_INFLIGHT
 var _light_dirty := {}       # Vector2i -> true，该区块发光方块有增删、灯光需要重刷
+var _loc_cached: Node
 
 # 造网格用的数值查找表（建一次、只读，传给后台线程）
 var _solid; var _opaque; var _transp; var _water
 var _ttop; var _tside; var _tbot; var _matbucket
+
+func _loc() -> Node:
+	if _loc_cached != null and is_instance_valid(_loc_cached):
+		return _loc_cached
+	var tree := get_tree() if is_inside_tree() else null
+	if tree != null and tree.root != null:
+		_loc_cached = tree.root.get_node_or_null("Locale")
+	if _loc_cached == null:
+		_loc_cached = (load("res://scripts/Locale.gd") as GDScript).new()
+		_loc_cached.call("load_strings")
+	return _loc_cached
+
+func _t(key: String) -> String:
+	var l := _loc()
+	return l.t(key) if l != null else key
+
+func _lang() -> String:
+	var l := _loc()
+	return str(l.current()) if l != null and l.has_method("current") else "zh"
 
 func setup(block_lib: BlockLibrary, world_seed: int = 1337, save_file: String = "", kind: String = "infinite") -> void:
 	lib = block_lib
@@ -267,28 +287,28 @@ func can_redo() -> bool:
 
 func undo_last_edit() -> bool:
 	if _undo_stack.is_empty():
-		edit_feedback.emit("blocked", "没有可撤销的编辑")
+		edit_feedback.emit("blocked", _t("WORLD_UNDO_EMPTY"))
 		return false
 	var entry: Dictionary = _undo_stack.pop_back()
 	if not _apply_history_entry(entry, true):
 		_undo_stack.append(entry)
-		edit_feedback.emit("blocked", "撤销失败")
+		edit_feedback.emit("blocked", _t("WORLD_UNDO_FAILED"))
 		return false
 	_redo_stack.append(entry)
-	edit_feedback.emit("undo", "撤销：" + _entry_action_label(entry))
+	edit_feedback.emit("undo", _t("WORLD_UNDO_LABEL") % _entry_action_label(entry))
 	return true
 
 func redo_last_edit() -> bool:
 	if _redo_stack.is_empty():
-		edit_feedback.emit("blocked", "没有可重做的编辑")
+		edit_feedback.emit("blocked", _t("WORLD_REDO_EMPTY"))
 		return false
 	var entry: Dictionary = _redo_stack.pop_back()
 	if not _apply_history_entry(entry, false):
 		_redo_stack.append(entry)
-		edit_feedback.emit("blocked", "重做失败")
+		edit_feedback.emit("blocked", _t("WORLD_REDO_FAILED"))
 		return false
 	_undo_stack.append(entry)
-	edit_feedback.emit("redo", "重做：" + _entry_action_label(entry))
+	edit_feedback.emit("redo", _t("WORLD_REDO_LABEL") % _entry_action_label(entry))
 	return true
 
 func clear_edit_history() -> void:
@@ -331,27 +351,27 @@ func _entry_action_label(entry: Dictionary) -> String:
 	if entry.has("edits"):
 		var edits: Array = entry["edits"]
 		if edits.is_empty():
-			return "批量编辑"
+			return _t("WORLD_EDIT_BATCH")
 		var first: Dictionary = edits[0]
 		var before := int(first.get("before", BlockLibrary.AIR))
 		var after := int(first.get("after", BlockLibrary.AIR))
 		if after == BlockLibrary.AIR:
-			return "批量挖掘 %d 格" % edits.size()
+			return _t("WORLD_EDIT_BATCH_MINE") % edits.size()
 		if before == BlockLibrary.AIR:
-			return "批量放置 %s x%d" % [_block_label(after), edits.size()]
-		return "批量编辑 %d 格" % edits.size()
+			return _t("WORLD_EDIT_BATCH_PLACE") % [_block_label(after), edits.size()]
+		return _t("WORLD_EDIT_BATCH_REPLACE") % edits.size()
 	var before := int(entry["before"])
 	var after := int(entry["after"])
 	if after == BlockLibrary.AIR:
-		return "挖掘 " + _block_label(before)
+		return _t("WORLD_EDIT_MINE") % _block_label(before)
 	if before == BlockLibrary.AIR:
-		return "放置 " + _block_label(after)
-	return "替换为 " + _block_label(after)
+		return _t("WORLD_EDIT_PLACE") % _block_label(after)
+	return _t("WORLD_EDIT_REPLACE") % _block_label(after)
 
 func _block_label(id: int) -> String:
 	if lib != null and lib.has_def(id):
-		return lib.block_name(id)
-	return "方块"
+		return lib.block_name_for_language(id, _lang()) if lib.has_method("block_name_for_language") else lib.block_name(id)
+	return _t("WORLD_BLOCK_FALLBACK")
 
 # ---------- 数据生成 ----------
 func _ensure_data(cc: Vector2i) -> void:
@@ -426,12 +446,12 @@ func best_landmark_restoration_percent() -> int:
 
 func _restoration_label(percent: int) -> String:
 	if percent >= 100:
-		return "修复完成"
+		return _t("WORLD_RESTORE_DONE")
 	if percent >= 60:
-		return "焕新中"
+		return _t("WORLD_RESTORE_RENEWING")
 	if percent > 0:
-		return "修复中"
-	return "待修复"
+		return _t("WORLD_RESTORE_REPAIRING")
+	return _t("WORLD_RESTORE_TODO")
 
 func has_unsaved_changes() -> bool:
 	return _delta_dirty or _meta_dirty
@@ -573,9 +593,9 @@ func load_world() -> bool:
 	_loaded_from_backup = loaded_from_backup
 	if loaded_from_backup:
 		_meta_dirty = true
-		save_feedback.emit("save", "已从备份恢复世界")
+		save_feedback.emit("save", _t("WORLD_SAVE_RESTORED_BACKUP"))
 	elif edit_count() > 0:
-		save_feedback.emit("save", "已载入世界")
+		save_feedback.emit("save", _t("WORLD_SAVE_LOADED"))
 	return true
 
 func save_world(force: bool = false) -> bool:
@@ -610,7 +630,7 @@ func save_world(force: bool = false) -> bool:
 	_delta_dirty = false
 	_meta_dirty = false
 	_loaded_from_backup = false
-	save_feedback.emit("save", "世界已保存")
+	save_feedback.emit("save", _t("WORLD_SAVE_SAVED"))
 	return true
 
 func _read_save_with_backup() -> Dictionary:

@@ -6,6 +6,10 @@ extends SceneTree
 
 const Locale = preload("res://scripts/Locale.gd")
 const GameSettings = preload("res://scripts/GameSettings.gd")
+const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
+const Player = preload("res://scripts/Player.gd")
+const WeatherSystem = preload("res://scripts/WeatherSystem.gd")
+const World = preload("res://scripts/World.gd")
 
 var failed := 0
 var _path := "user://tests/locale/settings.json"
@@ -81,6 +85,48 @@ func _initialize() -> void:
 	loc3.init(str(GameSettings.load_settings().get("language", "")))
 	check(loc3.current() == "en", "init 读回落盘的 language=en")
 
+	# ---- 运行时出口：英文模式下不再混入中文 UI 反馈 ----
+	var runtime_loc = _runtime_locale("en")
+	var lib := BlockLibrary.new()
+	check(lib.block_name_for_language(BlockLibrary.BRICK, "en") == "Bricks", "方块名有英文显示名")
+
+	var p := Player.new()
+	p._loc_cached = runtime_loc
+	root.add_child(p)
+	p.template_index = 1
+	var template_label := p.build_template_label()
+	check(template_label == "Platform", "建造模板名英文模式本地化（实得：%s）" % template_label)
+	p.free()
+
+	var target := Node3D.new()
+	root.add_child(target)
+	var weather := WeatherSystem.new()
+	weather._loc_cached = runtime_loc
+	root.add_child(weather)
+	weather.setup(target, 12345, true)
+	weather.force_weather("rain")
+	var weather_label := weather.weather_label()
+	check(weather_label == "Rain showers", "天气标签英文模式本地化（实得：%s）" % weather_label)
+	weather.free()
+	target.free()
+
+	var w := World.new()
+	w._loc_cached = runtime_loc
+	root.add_child(w)
+	w.setup(lib, 777, "")
+	var edit_feedback := []
+	w.edit_feedback.connect(func(kind: String, label: String) -> void:
+		edit_feedback.append({"kind": kind, "label": label})
+	)
+	check(not w.undo_last_edit(), "英文模式空撤销仍返回失败")
+	var last_edit: Dictionary = edit_feedback[edit_feedback.size() - 1] if not edit_feedback.is_empty() else {}
+	check(str(last_edit.get("label", "")) == "No edits to undo", "世界编辑反馈英文模式本地化（实得：%s）" % str(last_edit.get("label", "")))
+	w.free()
+	runtime_loc.set_language("zh")
+
+	# ---- 字符串表不含典型 mojibake / replacement 字符 ----
+	check(not _file_has_mojibake("res://i18n/ui_strings.json"), "ui_strings.json 无典型乱码字符")
+
 	_clean_settings()
 	if failed == 0:
 		print("✅ ALL LOCALE TESTS PASSED")
@@ -94,3 +140,26 @@ func _clean_settings() -> void:
 	DirAccess.make_dir_recursive_absolute(abs_dir)
 	if FileAccess.file_exists(_path):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(_path))
+
+func _runtime_locale(lang: String) -> Node:
+	var node = root.get_node_or_null("Locale")
+	if node == null:
+		node = Locale.new()
+		node.name = "Locale"
+		root.add_child(node)
+	if node.has_method("load_strings"):
+		node.load_strings()
+	if node.has_method("set_language"):
+		node.set_language(lang)
+	return node
+
+func _file_has_mojibake(path: String) -> bool:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return true
+	var text := f.get_as_text()
+	f.close()
+	for bad in ["�", "Ã", "Â", "â€™", "â€œ", "â€�", "â€”", "â€“", "ä¸", "å", "æ", "ç"]:
+		if text.contains(bad):
+			return true
+	return false

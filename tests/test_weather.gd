@@ -3,6 +3,8 @@ extends SceneTree
 #   godot --headless --path <项目> --script res://tests/test_weather.gd
 
 const WeatherSystem = preload("res://scripts/WeatherSystem.gd")
+const Locale = preload("res://scripts/Locale.gd")
+const GameSettings = preload("res://scripts/GameSettings.gd")
 
 var failed := 0
 var _feedback := []
@@ -21,6 +23,8 @@ func _on_weather_changed(kind: String, label: String) -> void:
 	_feedback.append({"kind": kind, "label": label})
 
 func _initialize() -> void:
+	OS.set_environment("VC_SETTINGS_PATH", "user://tests/weather/settings.json")
+	_force_language("zh")
 	var target := Node3D.new()
 	target.name = "WeatherTarget"
 	target.position = Vector3(10, 40, -8)
@@ -83,3 +87,17 @@ func _last_feedback_label() -> String:
 		return ""
 	var last: Dictionary = _feedback[_feedback.size() - 1]
 	return str(last.get("label", ""))
+
+func _force_language(lang: String) -> void:
+	var settings := GameSettings.load_settings()
+	settings["language"] = lang
+	GameSettings.save_settings(settings)
+	var loc = root.get_node_or_null("Locale")
+	if loc == null:
+		loc = Locale.new()
+		loc.name = "Locale"
+		root.add_child(loc)
+	if loc.has_method("load_strings"):
+		loc.load_strings()
+	if loc.has_method("set_language"):
+		loc.set_language(lang)

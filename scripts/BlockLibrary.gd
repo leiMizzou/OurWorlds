@@ -45,6 +45,48 @@ const NEON_MAGENTA := 36    # 霓虹品红：暗底+品红网格线，自发光
 const NEON_LIME := 37       # 霓虹绿：暗底+黄绿网格线，自发光
 const RAIL := 38            # 铁轨：深色金属底+平行亮轨+枕木
 
+const _NAME_EN := {
+	AIR: "Air",
+	GRASS: "Grass Block",
+	DIRT: "Dirt",
+	STONE: "Stone",
+	COBBLE: "Cobblestone",
+	LOG: "Log",
+	PLANKS: "Wood Planks",
+	SAND: "Sand",
+	GLASS: "Glass",
+	WATER: "Water",
+	LEAVES: "Leaves",
+	SNOW: "Snow",
+	COAL_ORE: "Coal Ore",
+	IRON_ORE: "Iron Ore",
+	BRICK: "Bricks",
+	MOSSY_STONE: "Mossy Stone",
+	BASALT: "Basalt",
+	MARBLE: "Marble",
+	LANTERN: "Lantern",
+	WILDFLOWER: "Wildflower",
+	TALL_GRASS: "Tall Grass",
+	PINE_LEAVES: "Pine Leaves",
+	COPPER_ORE: "Copper Ore",
+	RED_MUSHROOM: "Red Mushroom",
+	REEDS: "Reeds",
+	BLUE_CRYSTAL: "Blue Crystal",
+	CLAY: "Clay",
+	MOONSTONE_LAMP: "Moonstone Lamp",
+	POLISHED_IRON: "Polished Iron",
+	COPPER_PANEL: "Copper Panel",
+	STEEL_BLOCK: "Steel Block",
+	GOLD_TRIM: "Gold Trim",
+	RED_SAND: "Red Sand",
+	TERRACOTTA: "Terracotta",
+	SUNSTONE: "Sunstone",
+	NEON_CYAN: "Neon Cyan",
+	NEON_MAGENTA: "Neon Magenta",
+	NEON_LIME: "Neon Lime",
+	RAIL: "Rail",
+}
+
 # ---- 图集贴图格子编号 ----
 const T_GRASS_TOP := 0
 const T_GRASS_SIDE := 1
@@ -220,6 +262,10 @@ func creative_category_blocks(category_id: String) -> Array:
 
 func has_def(id: int) -> bool: return _defs.has(id)
 func block_name(id: int) -> String: return String(_defs[id]["name"]) if _defs.has(id) else "空气"
+func block_name_for_language(id: int, lang: String) -> String:
+	if lang == "en":
+		return String(_NAME_EN.get(id, "Air"))
+	return block_name(id)
 func is_air(id: int) -> bool: return id == AIR
 func is_renderable(id: int) -> bool: return id != AIR and _defs.has(id)
 func is_solid(id: int) -> bool: return _defs.has(id) and _defs[id]["solid"]

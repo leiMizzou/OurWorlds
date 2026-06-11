@@ -102,6 +102,15 @@ func _t(key: String) -> String:
 	var l := _loc()
 	return l.t(key) if l != null else key
 
+func _lang() -> String:
+	var l := _loc()
+	return str(l.current()) if l != null and l.has_method("current") else "zh"
+
+func _block_label(id: int) -> String:
+	if lib != null and lib.has_method("block_name_for_language"):
+		return lib.block_name_for_language(id, _lang())
+	return lib.block_name(id) if lib != null else _t("PALETTE_BLOCK_FALLBACK")
+
 func setup(block_lib: BlockLibrary, p) -> void:
 	lib = block_lib
 	player = p
@@ -794,7 +803,7 @@ func set_discovery_count(value: int) -> void:
 	_discovery_count = maxi(0, value)
 
 func set_last_discovery_label(label: String) -> void:
-	_last_discovery_label = label.replace("发现", "").strip_edges()
+	_last_discovery_label = _strip_discovery_prefix(label)
 	if _last_discovery_label != "":
 		_focused_landmark_label = _last_discovery_label
 		if _focused_restore_percent < 0:
@@ -817,13 +826,20 @@ func set_journey_steps(steps: Array, total: int = 4) -> void:
 	_journey_total = maxi(1, total)
 
 func set_restoration_goal(label: String, percent: int, complete: bool, restored_count: int, best_percent: int, distance: int = -1, direction: String = "") -> void:
-	_focused_landmark_label = label.replace("发现", "").strip_edges()
+	_focused_landmark_label = _strip_discovery_prefix(label)
 	_focused_restore_percent = -1 if percent < 0 else clampi(percent, 0, 100)
 	_focused_restore_complete = complete
 	_restored_landmark_count = maxi(0, restored_count)
 	_best_restore_percent = clampi(best_percent, 0, 100)
 	_focused_landmark_distance = distance
 	_focused_landmark_direction = direction if distance >= 0 else ""
+
+func _strip_discovery_prefix(label: String) -> String:
+	var text := label.strip_edges()
+	for prefix in ["发现", "Discovered "]:
+		if text.begins_with(prefix):
+			return text.substr(prefix.length()).strip_edges()
+	return text
 
 func set_recent_blocks(blocks: Array) -> void:
 	_recent_blocks.clear()
@@ -839,7 +855,7 @@ func _refresh_current_material(block_id: int) -> void:
 	if _shown_block_id == block_id:
 		return
 	_shown_block_id = block_id
-	_name_label.text = lib.block_name(block_id)
+	_name_label.text = _block_label(block_id)
 	if _current_icon != null:
 		_current_icon.texture = _icon(block_id)
 

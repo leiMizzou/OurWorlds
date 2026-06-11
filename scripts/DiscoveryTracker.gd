@@ -200,21 +200,21 @@ func _landmark_still_exists(pos: Vector3i) -> bool:
 func _landmark_label(pos: Vector3i) -> String:
 	var marker: int = world.get_block(pos.x, pos.y - 2, pos.z)
 	var name := _landmark_name(pos)
-	return "发现" + name + _landmark_type_label(pos, marker)
+	return _t("DISCOVERY_LANDMARK") % [name, _landmark_type_label(pos, marker)]
 
 func _landmark_type_label(pos: Vector3i, marker: int = -999) -> String:
 	# SUNSTONE 锚 -> 地下祭坛（地下地标）。其余按"锚下 2 格"的结构 marker 区分地表遗迹类型。
 	if world != null and world.get_block(pos.x, pos.y, pos.z) == BlockLibrary.SUNSTONE:
-		return "地下祭坛"
+		return _t("LANDMARK_TYPE_UNDERGROUND_ALTAR")
 	if marker == -999 and world != null:
 		marker = world.get_block(pos.x, pos.y - 2, pos.z)
 	match marker:
 		BlockLibrary.BRICK:
-			return "守望高塔"
+			return _t("LANDMARK_TYPE_WATCHTOWER")
 		BlockLibrary.COBBLE:
-			return "石环"
+			return _t("LANDMARK_TYPE_STONE_CIRCLE")
 		_:
-			return "古遗迹"
+			return _t("LANDMARK_TYPE_ANCIENT_RELIC")
 
 func _landmark_name(pos: Vector3i) -> String:
 	var words := PackedStringArray([
@@ -397,7 +397,7 @@ func _scan_mineral_codex() -> void:
 				continue
 			_first_mined[base_id] = true
 			var name := String(CODEX_MINERALS[base_id])
-			discovery_feedback.emit("mineral", "矿物图鉴：" + name)
+			discovery_feedback.emit("mineral", _t("DISCOVERY_MINERAL_CODEX") % name)
 
 func _procedural_block_at(cc: Vector2i, wp: Vector3i) -> int:
 	# 用 World 已有的程序基线查表（套用玩家增量之前的原始方块）。

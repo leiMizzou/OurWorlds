@@ -5,7 +5,7 @@ extends CharacterBody3D
 # i18n：动作反馈 / 建造意图等界面文案经 _loc()（/root/Locale 节点路径）取当前语言，
 # 而不是裸标识符 `Locale`（GDScript 在 `godot --script` 编译被 preload 的脚本时不注入
 # autoload 全局名）。这些文案由信号发给 HUD 或被 HUD 每帧拉取，无需在本节点常驻重译。
-# 建造模板「名称」（平台/立柱…）属于世界内容，保持中文，仅翻译包裹它的界面词（模板/朝向）。
+# 建造模板名和材料名是玩家可见 UI，按当前语言显示；模板 id / 方块 id 仍是稳定逻辑数据。
 
 const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
 const Chunk = preload("res://scripts/Chunk.gd")
@@ -190,6 +190,15 @@ func _t(key: String) -> String:
 	var l := _loc()
 	return l.t(key) if l != null else key
 
+func _lang() -> String:
+	var l := _loc()
+	return str(l.current()) if l != null and l.has_method("current") else "zh"
+
+func _block_label(id: int) -> String:
+	if lib != null and lib.has_method("block_name_for_language"):
+		return lib.block_name_for_language(id, _lang())
+	return lib.block_name(id) if lib != null else _t("BUILD_MATERIAL_FALLBACK")
+
 func current_block() -> int:
 	if lib != null and lib.has_def(selected_block_id):
 		return selected_block_id
@@ -204,7 +213,7 @@ func select_block_id(id: int, feedback_kind: String = "select") -> bool:
 		if int(blocks[i]) == id:
 			sel_index = i
 			break
-	var label := lib.block_name(current_block())
+	var label := _block_label(current_block())
 	if feedback_kind == "pick":
 		label = _t("BUILD_PICK") % label
 	action_feedback.emit(feedback_kind, label)
@@ -383,7 +392,7 @@ func _select_slot(i: int) -> void:
 		return
 	sel_index = next
 	selected_block_id = next_id
-	action_feedback.emit("select", lib.block_name(current_block()))
+	action_feedback.emit("select", _block_label(current_block()))
 
 func _try_place_current() -> bool:
 	if not _has_target:
@@ -409,7 +418,7 @@ func _try_place_current() -> bool:
 			if world.request_edit(c.x, c.y, c.z, id):
 				placed += 1
 	if placed > 0:
-		var label := build_template_label() if _template_uses_fixed_blocks() else lib.block_name(block_id)
+		var label := build_template_label() if _template_uses_fixed_blocks() else _block_label(block_id)
 		if build_template_id() != "off" and not _template_uses_fixed_blocks():
 			label = _t("BUILD_TEMPLATE_PREFIX") % [build_template_label(), label]
 		if placed > 1:
@@ -610,7 +619,7 @@ func _update_placement_preview() -> void:
 
 func placement_intent_summary() -> Dictionary:
 	var mode := build_mode_label()
-	var material := lib.block_name(current_block()) if lib != null else _t("BUILD_MATERIAL_FALLBACK")
+	var material := _block_label(current_block()) if lib != null else _t("BUILD_MATERIAL_FALLBACK")
 	if not _has_target:
 		return {
 			"state": _t("BUILD_AWAIT_TARGET"),
@@ -730,7 +739,7 @@ func build_template_id() -> String:
 
 func build_template_label() -> String:
 	var meta: Dictionary = BUILD_TEMPLATES[template_index]
-	return String(meta.get("label", "关闭"))
+	return _build_template_label(meta)
 
 func build_template_count() -> int:
 	return BUILD_TEMPLATES.size()
@@ -744,7 +753,12 @@ func build_template_id_at(index: int) -> String:
 
 func build_template_label_at(index: int) -> String:
 	var meta: Dictionary = BUILD_TEMPLATES[posmod(index, BUILD_TEMPLATES.size())]
-	return String(meta.get("label", "关闭"))
+	return _build_template_label(meta)
+
+func _build_template_label(meta: Dictionary) -> String:
+	var id := String(meta.get("id", "off")).to_upper()
+	var key := "BUILD_TEMPLATE_NAME_" + id
+	return _t(key) if _t(key) != key else String(meta.get("label", "关闭"))
 
 func build_template_orientation_label() -> String:
 	if build_template_id() == "off":
@@ -1282,7 +1296,7 @@ func _fire_kamehameha(charge: float = 5.0) -> void:
 	_spawn_beam_visual(from, aim, radius, length)
 	if _charge_ball != null:
 		_charge_ball.visible = false
-	action_feedback.emit("mode", "龟派气功波！")
+	action_feedback.emit("mode", _t("ACTION_KAMEHAMEHA"))
 
 # 沿气功波清出一条圆柱（球串）形的空腔。
 func _clear_beam_volume(from: Vector3, aim: Vector3, radius: int, length: int) -> void:

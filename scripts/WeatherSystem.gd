@@ -24,7 +24,7 @@ var intensity := 0.0
 
 var _target_intensity := 0.0
 var _state := "clear"
-var _label := "晴朗"
+var _label_key := "WEATHER_CLEAR"
 var _region_label := "草原"
 var _timer := 0.0
 var _rng := RandomNumberGenerator.new()
@@ -38,6 +38,22 @@ var _rain_sfx: AudioStreamPlayer
 var _wind_sfx: AudioStreamPlayer
 var _master_volume := 1.0
 var _audio_enabled := true
+var _loc_cached: Node
+
+func _loc() -> Node:
+	if _loc_cached != null and is_instance_valid(_loc_cached):
+		return _loc_cached
+	var tree := get_tree() if is_inside_tree() else null
+	if tree != null and tree.root != null:
+		_loc_cached = tree.root.get_node_or_null("Locale")
+	if _loc_cached == null:
+		_loc_cached = (load("res://scripts/Locale.gd") as GDScript).new()
+		_loc_cached.call("load_strings")
+	return _loc_cached
+
+func _t(key: String) -> String:
+	var l := _loc()
+	return l.t(key) if l != null else key
 
 func setup(track_target: Node3D, world_seed: int, weather_enabled: bool = true) -> void:
 	target = track_target
@@ -63,7 +79,7 @@ func set_master_volume(value: float) -> void:
 func set_enabled(value: bool) -> void:
 	enabled = value
 	if not enabled:
-		_set_weather("off", "天气关闭", 0.0, true, true)
+		_set_weather("off", "WEATHER_OFF", 0.0, true, true)
 		return
 	_timer = 0.0
 	_choose_next(true)
@@ -83,15 +99,15 @@ func force_weather(kind: String) -> void:
 	enabled = true
 	match kind:
 		"clear":
-			_set_weather("clear", "晴朗", 0.0, true, true)
+			_set_weather("clear", "WEATHER_CLEAR", 0.0, true, true)
 		"drizzle":
-			_set_weather("drizzle", "细雨", 0.38, true, true)
+			_set_weather("drizzle", "WEATHER_DRIZZLE", 0.38, true, true)
 		"rain":
-			_set_weather("rain", "阵雨", 0.78, true, true)
+			_set_weather("rain", "WEATHER_RAIN", 0.78, true, true)
 		"snow":
-			_set_weather("snow", "飘雪", 0.58, true, true)
+			_set_weather("snow", "WEATHER_SNOW", 0.58, true, true)
 		_:
-			_set_weather("clear", "晴朗", 0.0, true, true)
+			_set_weather("clear", "WEATHER_CLEAR", 0.0, true, true)
 	_timer = 9999.0
 
 func _process(delta: float) -> void:
@@ -108,22 +124,22 @@ func _choose_next(immediate: bool) -> void:
 	var roll := _rng.randf()
 	if roll < 0.52:
 		_timer = _rng.randf_range(45.0, 90.0)
-		_set_weather("clear", "晴朗", 0.0, true, immediate)
+		_set_weather("clear", "WEATHER_CLEAR", 0.0, true, immediate)
 	elif roll < 0.78:
 		_timer = _rng.randf_range(30.0, 58.0)
-		_set_weather("drizzle", "细雨", 0.38, true, immediate)
+		_set_weather("drizzle", "WEATHER_DRIZZLE", 0.38, true, immediate)
 	elif roll < 0.93:
 		_timer = _rng.randf_range(24.0, 48.0)
-		_set_weather("rain", "阵雨", 0.78, true, immediate)
+		_set_weather("rain", "WEATHER_RAIN", 0.78, true, immediate)
 	else:
 		_timer = _rng.randf_range(28.0, 54.0)
-		_set_weather("snow", "飘雪", 0.58, true, immediate)
+		_set_weather("snow", "WEATHER_SNOW", 0.58, true, immediate)
 
-func _set_weather(kind: String, label: String, target_value: float, emit_change: bool, immediate: bool) -> void:
+func _set_weather(kind: String, label_key: String, target_value: float, emit_change: bool, immediate: bool) -> void:
 	var before := _effective_label()
-	var changed := _state != kind or _label != label
+	var changed := _state != kind or _label_key != label_key
 	_state = kind
-	_label = label
+	_label_key = label_key
 	_target_intensity = clampf(target_value, 0.0, 1.0)
 	if immediate:
 		intensity = _target_intensity
@@ -338,10 +354,10 @@ static func _hash01(i: int, salt: int) -> float:
 func _effective_label() -> String:
 	if _is_cold_region():
 		if _state == "drizzle":
-			return "小雪"
+			return _t("WEATHER_LIGHT_SNOW")
 		if _state == "rain":
-			return "山雪"
-	return _label
+			return _t("WEATHER_MOUNTAIN_SNOW")
+	return _t(_label_key)
 
 func _is_cold_region() -> bool:
 	return _region_label == "雪峰" or _region_label == "雪山"

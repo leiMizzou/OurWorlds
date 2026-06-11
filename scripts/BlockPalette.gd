@@ -1,7 +1,7 @@
 extends CanvasLayer
 # 创造模式材料库：展示全部可放置方块，点击后回到建造。
-# i18n：面板 chrome（标题/关闭/最近/搜索框/分类提示/空状态）走 _loc()（/root/Locale 节点路径）双语化。
-# 方块名、分类名（来自 BlockLibrary，属世界内容）与特性/用途标签（块描述，兼作中文搜索索引）保持中文不译。
+# i18n：面板 chrome、方块名、分类名、特性与用途标签都走 _loc()（/root/Locale 节点路径）双语化。
+# 搜索索引仍保留中文、拼音和英文别名，保证两种语言都能快速检索。
 
 const BlockLibrary = preload("res://scripts/BlockLibrary.gd")
 
@@ -109,6 +109,15 @@ func _t(key: String) -> String:
 	var l := _loc()
 	return l.t(key) if l != null else key
 
+func _lang() -> String:
+	var l := _loc()
+	return str(l.current()) if l != null and l.has_method("current") else "zh"
+
+func _block_name(id: int) -> String:
+	if lib != null and lib.has_method("block_name_for_language"):
+		return lib.block_name_for_language(id, _lang())
+	return lib.block_name(id) if lib != null else _t("PALETTE_BLOCK_FALLBACK")
+
 # i18n：重设面板 chrome 文案（标题/关闭/搜索框/最近页签/空状态/分类提示）。
 # 方块名、分类名、特性与用途标签是内容/搜索索引，由 _refresh_all 在当前数据下重建即可。
 func _retranslate() -> void:
@@ -126,6 +135,8 @@ func _retranslate() -> void:
 	for id in _tab_buttons.keys():
 		var b: Button = _tab_buttons[id]
 		if b != null and is_instance_valid(b):
+			if String(id) != "recent":
+				b.text = _category_label(String(id), b.text)
 			b.tooltip_text = _category_tooltip(String(id))
 	_refresh_all()
 
@@ -269,7 +280,8 @@ func _build_tabs() -> Control:
 	row.add_child(recent)
 	for cat in lib.creative_categories():
 		var meta: Dictionary = cat
-		row.add_child(_tab_button(String(meta.get("name", "")), String(meta.get("id", "all"))))
+		var id := String(meta.get("id", "all"))
+		row.add_child(_tab_button(_category_label(id, String(meta.get("name", ""))), id))
 	return row
 
 func _tab_button(label: String, id: String) -> Button:
@@ -297,6 +309,8 @@ func _category_tooltip(id: String) -> String:
 			return _t("PALETTE_TOOLTIP_NATURE")
 		"decor":
 			return _t("PALETTE_TOOLTIP_DECOR")
+		"tech":
+			return _t("PALETTE_TOOLTIP_TECH")
 		"ores":
 			return _t("PALETTE_TOOLTIP_ORES")
 		_:
@@ -343,7 +357,7 @@ func _block_cell(id: int) -> Control:
 	row.add_child(icon)
 
 	var label := Label.new()
-	label.text = lib.block_name(id)
+	label.text = _block_name(id)
 	label.add_theme_font_size_override("font_size", 14)
 	label.modulate = Color(0.92, 0.96, 1.0, 0.92)
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -355,7 +369,7 @@ func _block_cell(id: int) -> Control:
 	hit.focus_mode = Control.FOCUS_NONE
 	hit.flat = true
 	# 悬停提示用途，提升可发现性（命中按钮在最上层，承载 tooltip）。
-	hit.tooltip_text = "%s　·　%s" % [lib.block_name(id), _block_use_label(id)]
+	hit.tooltip_text = "%s　·　%s" % [_block_name(id), _block_use_label(id)]
 	hit.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
 	hit.add_theme_stylebox_override("hover", StyleBoxEmpty.new())
 	hit.add_theme_stylebox_override("pressed", StyleBoxEmpty.new())
@@ -363,7 +377,7 @@ func _block_cell(id: int) -> Control:
 	hit.pressed.connect(func(): _select_block(id))
 	root.add_child(hit)
 
-	_buttons[id] = {"root": root, "panel": panel}
+	_buttons[id] = {"root": root, "panel": panel, "label": label, "hit": hit}
 	return root
 
 func _top_button(text: String) -> Button:
@@ -418,6 +432,7 @@ func _set_search_text(text: String) -> void:
 
 func _refresh_all() -> void:
 	_refresh_tabs()
+	_refresh_block_texts()
 	_sync_selection_to_visible()
 	_refresh_filter()
 	_refresh_selected()
@@ -522,6 +537,16 @@ func _refresh_filter() -> void:
 	if _empty_label != null:
 		_empty_label.visible = visible_count == 0
 
+func _refresh_block_texts() -> void:
+	for id in _buttons.keys():
+		var entry: Dictionary = _buttons[id]
+		var label: Label = entry.get("label")
+		if label != null and is_instance_valid(label):
+			label.text = _block_name(int(id))
+		var hit: Button = entry.get("hit")
+		if hit != null and is_instance_valid(hit):
+			hit.tooltip_text = "%s　·　%s" % [_block_name(int(id)), _block_use_label(int(id))]
+
 func _refresh_selected() -> void:
 	for id in _buttons.keys():
 		var entry: Dictionary = _buttons[id]
@@ -535,7 +560,7 @@ func _refresh_detail() -> void:
 	if lib == null or _detail_icon == null or _detail_name_label == null or _detail_meta_label == null or _detail_use_label == null:
 		return
 	_detail_icon.texture = _block_icon(_selected_id)
-	_detail_name_label.text = lib.block_name(_selected_id)
+	_detail_name_label.text = _block_name(_selected_id)
 	_detail_meta_label.text = "%s · %s · #%d · %s" % [_category_label_for(_selected_id), _block_traits_label(_selected_id), _selected_id, _selection_position_label()]
 	_detail_use_label.text = _block_use_label(_selected_id)
 
@@ -579,8 +604,9 @@ func _block_matches_search(id: int) -> bool:
 	var q := _search_text
 	if q == "":
 		return true
-	var haystack := "%s %s %s #%d" % [
+	var haystack := "%s %s %s %s #%d" % [
 		lib.block_name(id).to_lower(),
+		_block_name(id).to_lower(),
 		_category_label_for(id).to_lower(),
 		_block_search_terms(id).to_lower(),
 		id,
@@ -596,12 +622,17 @@ func _category_label_for(id: int) -> String:
 			continue
 		var blocks: Array = cat.get("blocks", [])
 		if blocks.has(id):
-			labels.append(String(cat.get("name", "")))
+			labels.append(_category_label(cid, String(cat.get("name", ""))))
 		if labels.size() >= 2:
 			break
 	if labels.is_empty():
 		return _t("PALETTE_BLOCK_FALLBACK")
 	return " / ".join(labels)
+
+func _category_label(category_id: String, fallback: String = "") -> String:
+	var key := "PALETTE_CAT_" + category_id.to_upper()
+	var text := _t(key)
+	return text if text != key else fallback
 
 func _block_traits_label(id: int) -> String:
 	return " / ".join(_block_trait_terms(id))
@@ -609,43 +640,43 @@ func _block_traits_label(id: int) -> String:
 func _block_trait_terms(id: int) -> PackedStringArray:
 	var tags := PackedStringArray()
 	if id == BlockLibrary.LANTERN or id == BlockLibrary.MOONSTONE_LAMP or id == BlockLibrary.BLUE_CRYSTAL:
-		tags.append("发光")
+		tags.append(_t("PALETTE_TRAIT_LIGHT"))
 	if lib.is_water(id):
-		tags.append("流体")
+		tags.append(_t("PALETTE_TRAIT_FLUID"))
 	elif not lib.is_solid(id):
-		tags.append("装饰")
+		tags.append(_t("PALETTE_TRAIT_DECOR"))
 	elif lib.is_transparent(id):
-		tags.append("透明")
+		tags.append(_t("PALETTE_TRAIT_TRANSPARENT"))
 	else:
-		tags.append("实体")
+		tags.append(_t("PALETTE_TRAIT_SOLID"))
 	if id == BlockLibrary.COAL_ORE or id == BlockLibrary.IRON_ORE or id == BlockLibrary.COPPER_ORE:
-		tags.append("矿物")
+		tags.append(_t("PALETTE_TRAIT_ORE"))
 	if id == BlockLibrary.WILDFLOWER or id == BlockLibrary.TALL_GRASS or id == BlockLibrary.RED_MUSHROOM or id == BlockLibrary.REEDS:
-		tags.append("植物")
+		tags.append(_t("PALETTE_TRAIT_PLANT"))
 	if id == BlockLibrary.BLUE_CRYSTAL:
-		tags.append("晶体")
+		tags.append(_t("PALETTE_TRAIT_CRYSTAL"))
 	return tags
 
 func _block_use_label(id: int) -> String:
 	match id:
 		BlockLibrary.GRASS, BlockLibrary.DIRT, BlockLibrary.SAND, BlockLibrary.SNOW, BlockLibrary.CLAY:
-			return "适合地形塑形与自然过渡"
+			return _t("PALETTE_USE_TERRAIN")
 		BlockLibrary.STONE, BlockLibrary.COBBLE, BlockLibrary.MOSSY_STONE, BlockLibrary.BASALT, BlockLibrary.MARBLE:
-			return "适合山体、遗迹和结构骨架"
+			return _t("PALETTE_USE_STONE")
 		BlockLibrary.BRICK, BlockLibrary.LOG, BlockLibrary.PLANKS, BlockLibrary.GLASS:
-			return "适合建筑外立面和室内细节"
+			return _t("PALETTE_USE_BUILDING")
 		BlockLibrary.LANTERN, BlockLibrary.MOONSTONE_LAMP:
-			return "适合夜景照明、路标和营火焦点"
+			return _t("PALETTE_USE_LIGHTING")
 		BlockLibrary.WILDFLOWER, BlockLibrary.TALL_GRASS, BlockLibrary.RED_MUSHROOM, BlockLibrary.REEDS, BlockLibrary.LEAVES, BlockLibrary.PINE_LEAVES:
-			return "适合植被层次和地表装饰"
+			return _t("PALETTE_USE_PLANTS")
 		BlockLibrary.BLUE_CRYSTAL:
-			return "适合晶洞、冷光装饰和神秘焦点"
+			return _t("PALETTE_USE_CRYSTAL")
 		BlockLibrary.COAL_ORE, BlockLibrary.IRON_ORE, BlockLibrary.COPPER_ORE:
-			return "适合矿脉、洞穴资源和工业细节"
+			return _t("PALETTE_USE_ORES")
 		BlockLibrary.WATER:
-			return "适合水景、浅湾和泉池"
+			return _t("PALETTE_USE_WATER")
 		_:
-			return "适合自由建造"
+			return _t("PALETTE_USE_DEFAULT")
 
 func _block_search_terms(id: int) -> String:
 	var terms := _block_trait_terms(id)
